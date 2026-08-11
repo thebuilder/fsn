@@ -149,14 +149,14 @@ const searchVisitLimit = 20000;
 const searchCandidateLimit = 200;
 
 /**
- * Walks breadth-first from `base` (an ancestry chain ending at the directory to search),
- * so shallow matches are found first. Recursion only follows directories already read
- * into memory — searching never triggers new disk access.
+ * Walks the whole subtree under `base` (an ancestry chain ending at the directory to
+ * search), breadth-first so shallow matches are found first. It only descends into
+ * directories already read into memory — searching never triggers new disk access.
  */
 export function searchFilesystem(
   base: FsNode[],
   query: string,
-  options: { recursive: boolean; limit: number },
+  options: { limit: number },
 ): SearchOutcome {
   const normalized = query.trim().toLowerCase();
   const candidates: SearchMatch[] = [];
@@ -181,11 +181,8 @@ export function searchFilesystem(
         if (candidates.length < searchCandidateLimit) candidates.push({ node, trail });
       }
       if (node.kind !== "directory") continue;
-      if (node.children) {
-        if (options.recursive) queue.push([...trail, node]);
-      } else if (options.recursive) {
-        unreadDirectories += 1;
-      }
+      if (node.children) queue.push([...trail, node]);
+      else unreadDirectories += 1;
     }
   }
 
