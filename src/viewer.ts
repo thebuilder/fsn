@@ -1,7 +1,7 @@
 import { formatBytes, type FsNode } from "./filesystem";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
-import type { RendererId, ToggleSpec, ViewerHost } from "./viewers/types";
+import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost } from "./viewers/types";
 
 type ViewerElements = {
   dialog: HTMLDialogElement;
@@ -52,7 +52,11 @@ export class FileViewer {
 
   constructor(private readonly elements: ViewerElements) {
     elements.close.addEventListener("click", () => elements.dialog.close());
-    elements.dialog.addEventListener("close", () => this.reset());
+    // `close` is delivered asynchronously, so a dialog that has already been reopened
+    // for the next object would otherwise be torn down by the previous one's event.
+    elements.dialog.addEventListener("close", () => {
+      if (!elements.dialog.open) this.reset();
+    });
     elements.zoom.addEventListener("click", () => {
       this.setCollapsed(false);
       this.setMaximized(!this.maximized);
@@ -138,6 +142,7 @@ export class FileViewer {
         if (!signal.aborted) this.elements.position.textContent = label;
       },
       addToggle: (spec) => this.addToggle(spec, signal),
+      addChoice: (spec) => this.addChoice(spec, signal),
       onCleanup: (dispose) => this.disposers.push(dispose),
       handOff: (id: RendererId) => {
         if (!signal.aborted) void this.dispatch(rendererById(id), node, path);
@@ -309,6 +314,42 @@ export class FileViewer {
     target.addEventListener("pointermove", onMove);
     target.addEventListener("pointerup", end);
     target.addEventListener("pointercancel", end);
+  }
+
+  private addChoice(spec: ChoiceSpec, signal: AbortSignal): Choice {
+    if (signal.aborted) return { select: () => undefined };
+    const group = el("div", "viewer-switch");
+    group.role = "group";
+    group.ariaLabel = spec.label;
+    let active = spec.initial;
+
+    const buttons = spec.options.map((option) => {
+      const button = el("button", "tool-toggle", option.label);
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(option.id === active));
+      group.append(button);
+      return { option, button };
+    });
+
+    const paint = (): void => {
+      for (const entry of buttons) entry.button.setAttribute("aria-pressed", String(entry.option.id === active));
+    };
+    for (const { option, button } of buttons) {
+      button.addEventListener("click", () => {
+        if (option.id === active) return;
+        active = option.id;
+        paint();
+        spec.onChange(active);
+      });
+    }
+    this.elements.tools.prepend(group);
+
+    return {
+      select: (id) => {
+        active = id;
+        paint();
+      },
+    };
   }
 
   private reset(): void {

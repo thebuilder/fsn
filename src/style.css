@@ -360,15 +360,48 @@
   .access-denied dt, .access-denied dd { margin: 0; font: 600 0.55rem var(--mono); }
   .access-denied dt { color: #88636c; }
   .access-denied dd { color: var(--signal); }
-  .media-deck { min-height: 100%; display: grid; place-content: center; justify-items: stretch; gap: 1.5rem; padding: 2rem; background: #08110f; }
-  .media-display { min-width: min(36rem, 75vw); padding: 1.5rem; border: 1px solid #315f54; background: #06110e; box-shadow: inset 0 0 3rem rgba(41,239,189,.05); }
-  .media-display p { margin: 0.8rem 0 0; color: #4c8d7d; font: 600 0.55rem var(--mono); text-align: center; }
-  .media-display .media-credit { margin-top: 0.5rem; color: var(--phosphor); letter-spacing: .06em; }
+  .media-deck { height: 100%; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0.9rem; padding: 0.9rem; background: #05090c; }
+  .media-deck:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: -4px; }
+  .media-deck.is-video { grid-template-rows: minmax(0, 1fr) 4.5rem auto; }
+  .media-deck.is-dead .visualizer-stage { border-color: var(--signal); }
+  .media-deck audio { display: none; }
+  .media-deck video { width: 100%; height: 100%; min-height: 0; object-fit: contain; background: #000; }
+  .visualizer-stage { position: relative; min-height: 0; overflow: hidden; border: 1px solid #23413c; background: #05070c; }
+  .visualizer-stage canvas { display: block; width: 100%; height: 100%; }
+  .visualizer-fallback { display: grid; height: 100%; place-content: center; margin: 0; color: #4c8d7d; font: 600 0.55rem var(--mono); letter-spacing: .1em; }
+  .media-credit { margin: 0; color: var(--phosphor); font: 600 0.55rem var(--mono); letter-spacing: .06em; text-align: center; }
   .media-credit a { color: inherit; text-decoration-color: rgba(134,250,221,.4); text-underline-offset: 0.25em; }
   .media-credit a:hover { text-decoration-color: currentColor; }
-  .equalizer { height: 8rem; display: flex; align-items: end; justify-content: center; gap: 0.35rem; }
-  .equalizer i { width: 0.65rem; height: calc(18% + var(--bar) * 5%); background: var(--phosphor); box-shadow: 0 0 8px rgba(134,250,221,.25); }
-  .media-deck :is(audio, video) { width: 100%; max-height: 22rem; accent-color: var(--signal); }
+
+  .transport { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; border: 1px solid #23413c; background: linear-gradient(#0c1a18, #081311); }
+  .transport-key { position: relative; width: 2.1rem; height: 1.9rem; display: grid; place-items: center; border: 1px solid #37605a; border-radius: 0.15rem; background: linear-gradient(#132523, #0d1b19); cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+  .transport-key:hover { border-color: var(--phosphor); background: #17322e; }
+  .transport-key:active { transform: translateY(1px); }
+  .transport-key i { display: block; background: var(--phosphor); box-shadow: 0 0 8px rgba(134,250,221,.5); }
+  /* Play: a triangle drawn with a clip so the button stays one element. Nudged right
+     because a triangle centred on its bounding box reads as sitting too far left. */
+  .transport-key.is-play i { width: 0.72rem; height: 0.8rem; clip-path: polygon(0 0, 100% 50%, 0 100%); transform: translateX(0.06rem); }
+  /* Pause: one bar plus a hard-edged shadow for the second. The shadow adds no layout,
+     so the box shifts left by half the offset to centre the pair. */
+  .transport-key.is-play.is-playing i { width: 0.24rem; height: 0.8rem; clip-path: none; transform: translateX(-0.17rem); box-shadow: 0.34rem 0 0 var(--phosphor), 0 0 8px rgba(134,250,221,.5); }
+  .transport-key.is-stop i { width: 0.72rem; height: 0.72rem; }
+  .transport-key.is-mute i { width: 0.7rem; height: 0.7rem; clip-path: polygon(0 30%, 38% 30%, 74% 0, 74% 100%, 38% 70%, 0 70%); }
+  .transport-key.is-mute.is-muted i { background: #6b7f7b; box-shadow: none; }
+  .transport-time { min-width: 3.1rem; color: var(--phosphor); font: 600 0.6rem var(--mono); font-variant-numeric: tabular-nums; text-align: center; }
+
+  .transport input[type="range"] { --progress: 0%; height: 1.1rem; flex: 1; appearance: none; background: transparent; cursor: pointer; }
+  .transport input.transport-volume { flex: 0 0 4.5rem; }
+  .transport input[type="range"]::-webkit-slider-runnable-track { height: 0.32rem; border: 1px solid #2c4f49; background: linear-gradient(90deg, var(--phosphor) var(--progress), #0c1a18 var(--progress)); box-shadow: 0 0 10px rgba(134,250,221,.18); }
+  .transport input[type="range"]::-moz-range-track { height: 0.32rem; border: 1px solid #2c4f49; background: linear-gradient(90deg, var(--phosphor) var(--progress), #0c1a18 var(--progress)); }
+  .transport input[type="range"]::-webkit-slider-thumb { width: 0.5rem; height: 1rem; margin-top: -0.38rem; appearance: none; border: 0; border-radius: 0.06rem; background: var(--phosphor-bright); box-shadow: 0 0 10px rgba(217,255,239,.7); }
+  .transport input[type="range"]::-moz-range-thumb { width: 0.5rem; height: 1rem; border: 0; border-radius: 0.06rem; background: var(--phosphor-bright); box-shadow: 0 0 10px rgba(217,255,239,.7); }
+  .transport input[type="range"]:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: 3px; }
+
+  .viewer-switch { display: flex; }
+  .viewer-switch .tool-toggle { border-radius: 0; }
+  .viewer-switch .tool-toggle + .tool-toggle { border-left-width: 0; }
+  .viewer-switch .tool-toggle:first-child { border-radius: 0.15rem 0 0 0.15rem; }
+  .viewer-switch .tool-toggle:last-child { border-radius: 0 0.15rem 0.15rem 0; }
   .pdf-view { width: 100%; height: 100%; min-height: 34rem; border: 0; background: #fff; }
   .viewer-tools { display: flex; align-items: center; gap: 0.4rem; }
   .media-display.is-slim { min-width: 0; padding: 0.7rem; }

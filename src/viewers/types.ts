@@ -7,6 +7,20 @@ export type ToggleSpec = {
   onChange: (on: boolean) => void;
 };
 
+/** A segmented group in the toolbar for picking one of several modes. */
+export type ChoiceSpec = {
+  /** Names the group for assistive technology. */
+  label: string;
+  options: Array<{ id: string; label: string }>;
+  initial: string;
+  onChange: (id: string) => void;
+};
+
+export type Choice = {
+  /** Moves the selection without firing `onChange` — for reverting a failed switch. */
+  select(id: string): void;
+};
+
 /**
  * Everything a renderer is allowed to touch. Renderers never see the dialog, the
  * toolbar or each other; the host owns the chrome and the lifetime, which is what
@@ -26,6 +40,7 @@ export type ViewerHost = {
   setMode(label: string): void;
   setStatus(label: string): void;
   addToggle(spec: ToggleSpec): void;
+  addChoice(spec: ChoiceSpec): Choice;
   onCleanup(dispose: () => void): void;
   /** Hands the object to a different renderer, e.g. the denied screen's hex override. */
   handOff(rendererId: RendererId): void;
