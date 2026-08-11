@@ -3,6 +3,7 @@ import { createDemoFilesystem } from "./demo";
 import {
   categoryOf,
   ensureChildren,
+  peekChildren,
   formatBytes,
   formatDate,
   openBrowserDirectory,
@@ -121,10 +122,25 @@ function restartTitleTransition(): void {
   sceneTitle.classList.add("is-entering");
 }
 
-function renderDirectory(announce = true, direction: NavigationDirection = "backward"): void {
+/** Guards against a slow peek from an abandoned directory landing after a newer one. */
+let renderGeneration = 0;
+
+async function renderDirectory(announce = true, direction: NavigationDirection = "backward"): Promise<void> {
   renderChrome();
+  const generation = (renderGeneration += 1);
   const current = currentDirectory();
   const children = currentChildren();
+
+  // Plot size and preview markers come from one level further down, so those listings
+  // have to land before the layout is built — otherwise every folder is drawn the same
+  // size and the one thing a plot is supposed to tell you is missing. Peeking never
+  // opens a file, so this is a readdir per sub-directory, not a metadata sweep.
+  const unknown = children.filter((node) => node.kind === "directory" && !node.peek);
+  if (unknown.length) {
+    await Promise.all(unknown.map((node) => peekChildren(node)));
+    if (generation !== renderGeneration) return;
+  }
+
   world.setDirectory(current, children, direction);
   if (announce) setStatus(`${current.name} mounted · ${children.length} objects`);
 }
@@ -159,7 +175,7 @@ function renderBreadcrumbs(): void {
     button.ariaCurrent = isLeaf ? "page" : "false";
     button.addEventListener("click", () => {
       ancestry = ancestry.slice(0, index + 1);
-      renderDirectory(true, "backward");
+      void renderDirectory(true, "backward");
     });
     // Animate crumbs that are genuinely new, plus the one that just became current
     // (so stepping back reads as a change rather than a silent restyle).
@@ -231,7 +247,7 @@ async function openNode(node: FsNode): Promise<void> {
   try {
     await ensureChildren(node);
     ancestry.push(node);
-    renderDirectory(true, "forward");
+    void renderDirectory(true, "forward");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : `Unable to open ${node.name}`, true);
   }
@@ -240,7 +256,7 @@ async function openNode(node: FsNode): Promise<void> {
 function goBack(): void {
   if (ancestry.length <= 1) return;
   ancestry.pop();
-  renderDirectory(true, "backward");
+  void renderDirectory(true, "backward");
 }
 
 function goToRoot(): void {
@@ -250,14 +266,14 @@ function goToRoot(): void {
     return;
   }
   ancestry = [ancestry[0]];
-  renderDirectory(true, "backward");
+  void renderDirectory(true, "backward");
 }
 
 function setFilesystem(next: FilesystemRoot): void {
   filesystem = next;
   ancestry = [next.root];
   ancestryById.clear();
-  renderDirectory(true, "initial");
+  void renderDirectory(true, "initial");
 }
 
 function setStatus(message: string, isError = false): void {
@@ -398,7 +414,7 @@ function revealMatch(match: SearchMatch): void {
   if (destination.id !== currentDirectory().id) {
     const direction: NavigationDirection = match.trail.length > ancestry.length ? "forward" : "backward";
     ancestry = [...match.trail];
-    renderDirectory(true, direction);
+    void renderDirectory(true, direction);
   }
   world.focusNode(match.node);
   updateSelection(match.node);
@@ -498,5 +514,5 @@ window.addEventListener("pointerdown", (event) => {
   if (event.button === 0) world.setKeyboardNavigationActive(false);
 });
 
-renderDirectory(false, "initial");
+void renderDirectory(false, "initial");
 welcomeDialog.showModal();
