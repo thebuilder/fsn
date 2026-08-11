@@ -7,9 +7,12 @@ import {
   openBrowserDirectory,
   pathFor,
   rootFromFileList,
+  searchFilesystem,
   sortNodes,
   type FilesystemRoot,
   type FsNode,
+  type SearchMatch,
+  type SearchOutcome,
 } from "./filesystem";
 import { WorldScene, type NavigationDirection } from "./scene";
 import { FileViewer } from "./viewer";
@@ -41,6 +44,9 @@ const searchButton = getElement<HTMLButtonElement>("search-button");
 const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
+const searchCount = getElement<HTMLElement>("search-count");
+const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
+const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 
 const viewer = new FileViewer({
@@ -269,39 +275,122 @@ async function chooseFolder(): Promise<void> {
   }
 }
 
+/** Results are capped so a broad query returns a readable list instead of the whole tree. */
+const searchResultLimit = 25;
+let searchScope: "current" | "all" = "current";
+let resultButtons: HTMLButtonElement[] = [];
+let activeResultIndex = -1;
+
 function openSearch(): void {
   searchInput.value = "";
-  renderSearchResults("");
+  applySearchScope(searchScope);
   searchDialog.showModal();
   searchInput.focus();
 }
 
+function applySearchScope(scope: "current" | "all"): void {
+  searchScope = scope;
+  scopeCurrentButton.ariaPressed = String(scope === "current");
+  scopeAllButton.ariaPressed = String(scope === "all");
+  searchInput.placeholder = scope === "all" ? "Search everything loaded…" : "Search this directory…";
+  renderSearchResults(searchInput.value);
+}
+
 function renderSearchResults(query: string): void {
-  const normalized = query.trim().toLowerCase();
-  const nodes = currentChildren().filter((node) => !normalized || node.name.toLowerCase().includes(normalized)).slice(0, 12);
+  const recursive = searchScope === "all";
+  const base = recursive ? [filesystem.root] : ancestry;
   searchResults.replaceChildren();
-  if (!nodes.length) {
-    const empty = document.createElement("li");
-    empty.className = "search-empty";
-    empty.textContent = "NO MATCHING OBJECTS";
-    searchResults.append(empty);
+  resultButtons = [];
+
+  // Listing an entire tree on an empty query is noise; the directory view already shows one level.
+  if (recursive && !query.trim()) {
+    searchCount.textContent = "";
+    searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
+    setActiveResult(-1);
     return;
   }
-  nodes.forEach((node) => {
+
+  const outcome = searchFilesystem(base, query, { recursive, limit: searchResultLimit });
+  searchCount.textContent = describeOutcome(outcome);
+  if (!outcome.matches.length) {
+    searchResults.append(emptyResult("NO MATCHING OBJECTS"));
+    setActiveResult(-1);
+    return;
+  }
+  outcome.matches.forEach((match, index) => {
+    const { node, trail } = match;
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small>${node.kind === "directory" ? `${node.children?.length ?? "?"} objects` : formatBytes(node.size)}</small></span><kbd>↵</kbd>`;
+    button.id = `search-result-${index}`;
+    button.role = "option";
+    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small></small></span><kbd>↵</kbd>`;
     const strong = button.querySelector("strong");
     if (strong) strong.textContent = node.name;
-    button.addEventListener("click", () => {
-      searchDialog.close();
-      world.focusNode(node);
-      updateSelection(node);
-    });
+    const detail = button.querySelector("small");
+    const measure = node.kind === "directory" ? `${node.children?.length ?? "?"} objects` : formatBytes(node.size);
+    if (detail) {
+      const elsewhere = trail[trail.length - 1].id !== currentDirectory().id;
+      detail.textContent = elsewhere ? `${measure} · ${trail.map((part) => part.name).join("/")}` : measure;
+    }
+    button.addEventListener("click", () => revealMatch(match));
+    // Keep pointer and keyboard on the same row, so there is only ever one highlight.
+    button.addEventListener("pointerenter", () => setActiveResult(index));
     item.append(button);
     searchResults.append(item);
+    resultButtons.push(button);
   });
+  setActiveResult(0);
+}
+
+/** Highlights a result without moving focus; the input keeps it so typing never breaks. */
+function setActiveResult(index: number): void {
+  activeResultIndex = resultButtons.length ? Math.max(0, Math.min(index, resultButtons.length - 1)) : -1;
+  resultButtons.forEach((button, position) => {
+    const isActive = position === activeResultIndex;
+    button.classList.toggle("is-active", isActive);
+    button.ariaSelected = String(isActive);
+  });
+  const active = resultButtons[activeResultIndex];
+  searchInput.setAttribute("aria-activedescendant", active?.id ?? "");
+  active?.scrollIntoView({ block: "nearest" });
+}
+
+function moveActiveResult(step: number): void {
+  if (!resultButtons.length) return;
+  const next = (activeResultIndex + step + resultButtons.length) % resultButtons.length;
+  setActiveResult(next);
+}
+
+function describeOutcome(outcome: SearchOutcome): string {
+  const counted = `${outcome.complete ? "" : "over "}${outcome.total}`;
+  const headline = outcome.total > outcome.matches.length
+    ? `Showing ${outcome.matches.length} of ${counted} — refine to narrow`
+    : `${counted} ${outcome.total === 1 ? "match" : "matches"}`;
+  // Local directories load lazily, so say plainly which part of the tree was not looked at.
+  return outcome.unreadDirectories > 0
+    ? `${headline} · ${outcome.unreadDirectories} unopened ${outcome.unreadDirectories === 1 ? "directory" : "directories"} not indexed`
+    : headline;
+}
+
+function emptyResult(message: string): HTMLLIElement {
+  const empty = document.createElement("li");
+  empty.className = "search-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+/** Travels to the directory holding the match before framing it, so results outside the view still work. */
+function revealMatch(match: SearchMatch): void {
+  searchDialog.close();
+  const destination = match.trail[match.trail.length - 1];
+  if (destination.id !== currentDirectory().id) {
+    const direction: NavigationDirection = match.trail.length > ancestry.length ? "forward" : "backward";
+    ancestry = [...match.trail];
+    renderDirectory(true, direction);
+  }
+  world.focusNode(match.node);
+  updateSelection(match.node);
 }
 
 function trimName(name: string, length: number): string {
@@ -313,6 +402,30 @@ demoButton.addEventListener("click", () => setFilesystem(createDemoFilesystem())
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode));
 searchButton.addEventListener("click", openSearch);
 searchInput.addEventListener("input", () => renderSearchResults(searchInput.value));
+searchDialog.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    moveActiveResult(event.key === "ArrowDown" ? 1 : -1);
+    // Arrows anywhere in the dialog drive the list, so hand typing back to the input.
+    searchInput.focus();
+    return;
+  }
+  // Enter from the input opens the highlighted result; the dialog's own buttons keep theirs.
+  if (event.key === "Enter" && event.target === searchInput) {
+    const active = resultButtons[activeResultIndex];
+    if (!active) return;
+    event.preventDefault();
+    active.click();
+  }
+});
+scopeCurrentButton.addEventListener("click", () => {
+  applySearchScope("current");
+  searchInput.focus();
+});
+scopeAllButton.addEventListener("click", () => {
+  applySearchScope("all");
+  searchInput.focus();
+});
 folderFallback.addEventListener("change", () => {
   if (!folderFallback.files) return;
   const imported = rootFromFileList(folderFallback.files);

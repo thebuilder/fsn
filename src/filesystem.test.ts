@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { categoryOf, formatBytes, rootFromFileList } from "./filesystem";
+import { categoryOf, formatBytes, rootFromFileList, searchFilesystem, type FsNode } from "./filesystem";
+
+function directory(name: string, children: FsNode[]): FsNode {
+  return { id: name, parentId: null, name, kind: "directory", children };
+}
+
+function file(name: string): FsNode {
+  return { id: name, parentId: null, name, kind: "file", size: 1 };
+}
+
+function fixtureTree(): FsNode {
+  return directory("root", [
+    directory("src", [file("scene.ts"), file("main.ts"), directory("deep", [file("main-worker.ts")])]),
+    { id: "unopened", parentId: "root", name: "unopened", kind: "directory" },
+    file("readme.md"),
+  ]);
+}
 
 describe("filesystem utilities", () => {
   it("classifies representative file types", () => {
@@ -30,5 +46,52 @@ describe("filesystem utilities", () => {
     expect(snapshot?.root.children?.map((node) => node.name)).toEqual(["images", "notes"]);
     expect(snapshot?.root.children?.[1].children?.[0].name).toBe("readme.txt");
     expect(snapshot?.sourceLabel).toContain("LOCAL SNAPSHOT");
+  });
+});
+
+describe("filesystem search", () => {
+  it("stays inside the current directory when not recursive", () => {
+    const root = fixtureTree();
+
+    const outcome = searchFilesystem([root], "main", { recursive: false, limit: 10 });
+
+    expect(outcome.matches).toEqual([]);
+    expect(outcome.total).toBe(0);
+  });
+
+  it("walks the whole loaded tree when recursive and reports each match's trail", () => {
+    const root = fixtureTree();
+
+    const outcome = searchFilesystem([root], "main", { recursive: true, limit: 10 });
+
+    expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "main-worker.ts"]);
+    expect(outcome.matches[1].trail.map((part) => part.name)).toEqual(["root", "src", "deep"]);
+    expect(outcome.total).toBe(2);
+  });
+
+  it("ranks prefix matches above matches buried inside a name", () => {
+    const root = directory("root", [file("zz-main.ts"), file("main.ts")]);
+
+    const outcome = searchFilesystem([root], "main", { recursive: false, limit: 10 });
+
+    expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "zz-main.ts"]);
+  });
+
+  it("caps returned matches while still counting every match", () => {
+    const root = directory("root", Array.from({ length: 40 }, (_, index) => file(`log-${index}.txt`)));
+
+    const outcome = searchFilesystem([root], "log", { recursive: false, limit: 25 });
+
+    expect(outcome.matches).toHaveLength(25);
+    expect(outcome.total).toBe(40);
+  });
+
+  it("counts directories that have not been read instead of reaching for disk", () => {
+    const root = fixtureTree();
+
+    const outcome = searchFilesystem([root], "ts", { recursive: true, limit: 10 });
+
+    expect(outcome.unreadDirectories).toBe(1);
+    expect(outcome.complete).toBe(true);
   });
 });
