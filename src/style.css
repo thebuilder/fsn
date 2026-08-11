@@ -115,6 +115,7 @@
   }
   .breadcrumbs button:hover { color: var(--phosphor-bright); }
   .breadcrumbs button[aria-current="page"] { color: #fff; }
+  .breadcrumbs button.is-entering { animation: crumb-in 260ms cubic-bezier(.2, .7, .3, 1) backwards; }
   .breadcrumbs span { color: rgba(134, 250, 221, 0.3); font: 0.7rem var(--mono); }
 
   .top-actions, .welcome-actions { display: flex; align-items: center; gap: 0.5rem; }
@@ -153,6 +154,9 @@
     pointer-events: none;
     text-shadow: 0 2px 18px rgba(0,0,0,.95);
   }
+  .scene-title.is-entering > * { animation: title-in 320ms cubic-bezier(.2, .7, .3, 1) backwards; }
+  .scene-title.is-entering > :nth-child(2) { animation-delay: 40ms; }
+  .scene-title.is-entering > :nth-child(3) { animation-delay: 80ms; }
   .scene-title h1 { margin: 0.35rem 0 0.3rem; font: 500 clamp(1.6rem, 3vw, 2.8rem)/1 var(--sans); letter-spacing: -0.04em; }
   .scene-title > p:last-child { margin: 0; color: #9bb0aa; font: 600 0.65rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
 
@@ -247,12 +251,9 @@
   dialog::backdrop { background: rgba(1, 5, 6, 0.72); backdrop-filter: blur(5px) saturate(.65); }
   .welcome-dialog { width: min(44rem, calc(100vw - 2rem)); padding: 0; border: 1px solid var(--line-strong); background: #091212; box-shadow: 0 2rem 7rem #000, 0 0 60px rgba(105,249,216,.08); }
   .welcome-dialog[open] { display: grid; grid-template-columns: 0.9fr 1.1fr; }
-  .welcome-visual { position: relative; min-height: 22rem; overflow: hidden; border-right: 1px solid var(--line); background: radial-gradient(circle at 50% 55%, rgba(100,255,216,.18), transparent 42%), linear-gradient(#071211 0 40%, #0d2d27 40% 41%, #050808 41%); perspective: 500px; }
-  .welcome-visual::before { position: absolute; inset: 40% -50% -50%; content: ""; background-image: linear-gradient(rgba(91,255,217,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(91,255,217,.22) 1px, transparent 1px); background-size: 2rem 2rem; transform: rotateX(66deg); transform-origin: 50% 0; mask-image: linear-gradient(#000, transparent 80%); }
-  .mini-grid { position: absolute; inset: 32% 18% 25%; display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; gap: 0.65rem; transform: rotateX(5deg); }
-  .mini-grid i { height: 2.5rem; background: #55e5c8; box-shadow: 0 0 14px rgba(85,229,200,.22), inset -0.5rem -0.5rem rgba(4,53,48,.25); transform: skewY(-5deg); }
-  .mini-grid i:nth-child(3n+1) { height: 3.8rem; background: var(--signal); }
-  .mini-grid i:nth-child(4n) { height: 5.2rem; }
+  .welcome-visual { position: relative; display: grid; min-height: 22rem; overflow: hidden; padding: 1.25rem; border-right: 1px solid var(--line); background: radial-gradient(circle at 50% 60%, rgba(100,255,216,.12), transparent 55%), #050b0b; }
+  /* preserveAspectRatio centres the artwork, so the SVG can safely fill its box. */
+  .welcome-art { width: 100%; height: 100%; min-height: 0; filter: drop-shadow(0 1.25rem 1.5rem rgba(0,0,0,.55)); }
   .welcome-copy { display: flex; flex-direction: column; align-items: start; justify-content: center; padding: 2.5rem; }
   .welcome-copy h2 { margin: 0.65rem 0 1rem; font: 550 2.75rem/.95 var(--sans); letter-spacing: -0.06em; text-wrap: balance; }
   .welcome-copy h2 span { display: block; }
@@ -297,9 +298,11 @@
   .viewer-footer { min-height: 1.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0 0.55rem; border-top: 1px solid #536c65; color: #263e38; font: 700 0.48rem var(--mono); }
   .viewer-footer span:first-child { display: flex; align-items: center; gap: 0.4rem; }
   .viewer-led { width: 0.4rem; height: 0.4rem; background: #16b688; box-shadow: 0 0 4px #16b688; }
-  .image-view { min-height: 100%; display: grid; place-items: center; align-content: center; gap: 0.7rem; margin: 0; padding: 1rem; background-color: #14221f; background-image: linear-gradient(45deg, #0d1917 25%, transparent 25%), linear-gradient(-45deg, #0d1917 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0d1917 75%), linear-gradient(-45deg, transparent 75%, #0d1917 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
-  .image-view img { max-width: 100%; max-height: 34rem; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
-  .image-view img.is-pixelated { image-rendering: pixelated; filter: contrast(1.12) saturate(.82); }
+  .image-view { min-height: 100%; max-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; margin: 0; padding: 1rem; background-color: #14221f; background-image: linear-gradient(45deg, #0d1917 25%, transparent 25%), linear-gradient(-45deg, #0d1917 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0d1917 75%), linear-gradient(-45deg, transparent 75%, #0d1917 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
+  /* min-height:0 lets a tall photo shrink instead of pushing the caption out of view. */
+  .image-view .image-surface { max-width: 100%; max-height: 34rem; min-height: 0; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
+  .image-view figcaption { flex: none; }
+  .image-view .image-surface.is-pixelated { image-rendering: pixelated; filter: contrast(1.12) saturate(.82); }
   .image-view figcaption { padding: 0.25rem 0.55rem; background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
   .text-document { min-height: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); background: #081210; }
   .line-numbers { margin: 0; padding: 1.25rem 0.75rem 1.25rem 2.6rem; border-right: 1px solid rgba(117,255,216,.14); background: #0c1916; color: #416e62; font: 0.7rem/1.65 var(--mono); text-align: right; user-select: none; }
@@ -327,6 +330,8 @@
   .media-deck :is(audio, video) { width: 100%; max-height: 22rem; accent-color: var(--signal); }
   .pdf-view { width: 100%; height: 100%; min-height: 34rem; border: 0; background: #fff; }
 
+  @keyframes title-in { from { opacity: 0; transform: translateY(0.6rem); } }
+  @keyframes crumb-in { from { opacity: 0; transform: translateX(-0.45rem); } }
   @keyframes led-pulse { 50% { opacity: .35; } }
   @keyframes load-scan { to { background-position: .7rem 0; } }
   @keyframes viewer-in { from { opacity: 0; transform: scale(.97) translateY(.7rem); } }

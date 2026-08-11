@@ -13,10 +13,15 @@ type ViewerElements = {
 };
 
 const MAX_TEXT_BYTES = 2_000_000;
+/** Longest edge we rasterise to; keeps huge photos from allocating a vast canvas. */
+const MAX_CANVAS_EDGE = 1_600;
+/** Width, in blocks, of the downsampled image the pixel filter upscales from. */
+const PIXEL_COLUMNS = 140;
 
 export class FileViewer {
   private objectUrl: string | null = null;
   private pixelated = true;
+  private imageSource: HTMLImageElement | null = null;
 
   constructor(private readonly elements: ViewerElements) {
     elements.close.addEventListener("click", () => elements.dialog.close());
@@ -60,18 +65,78 @@ export class FileViewer {
     this.pixelated = true;
     this.elements.pixelToggle.setAttribute("aria-pressed", "true");
     this.elements.pixelToggle.textContent = "PIXEL FILTER: ON";
-    const frame = document.createElement("figure");
-    frame.className = "image-view";
+
     const image = document.createElement("img");
     image.src = source;
     image.alt = node.name;
-    image.className = "is-pixelated";
     await image.decode().catch(() => undefined);
+    this.imageSource = image;
+
+    const frame = document.createElement("figure");
+    frame.className = "image-view";
+    const canvas = document.createElement("canvas");
+    canvas.className = "image-surface";
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", node.name);
     const caption = document.createElement("figcaption");
     caption.textContent = `${image.naturalWidth || "?"} × ${image.naturalHeight || "?"} PX / RGB CHANNEL`;
-    frame.append(image, caption);
+    frame.append(canvas, caption);
     this.elements.content.replaceChildren(frame);
+
+    if (!this.paintImage(canvas)) {
+      // Rasterising failed (a cross-origin or undecodable source) — show it as-is.
+      image.className = "image-surface";
+      frame.replaceChild(image, canvas);
+      this.elements.pixelToggle.hidden = true;
+    }
     this.elements.position.textContent = "IMAGE DECODED";
+  }
+
+  /**
+   * Redraws the image at the current filter setting. The pixel filter genuinely
+   * resamples: it averages down to PIXEL_COLUMNS wide, then scales back up with
+   * smoothing off, which is the only way to get real blocks out of a source that
+   * is never displayed larger than its natural size.
+   */
+  private paintImage(target?: HTMLCanvasElement): boolean {
+    const image = this.imageSource;
+    const canvas = target ?? this.elements.content.querySelector("canvas");
+    if (!image || !canvas) return false;
+    const naturalWidth = image.naturalWidth || 0;
+    const naturalHeight = image.naturalHeight || 0;
+    if (!naturalWidth || !naturalHeight) return false;
+
+    const fit = Math.min(1, MAX_CANVAS_EDGE / Math.max(naturalWidth, naturalHeight));
+    const width = Math.max(1, Math.round(naturalWidth * fit));
+    const height = Math.max(1, Math.round(naturalHeight * fit));
+    canvas.width = width;
+    canvas.height = height;
+    canvas.classList.toggle("is-pixelated", this.pixelated);
+
+    const context = canvas.getContext("2d");
+    if (!context) return false;
+    try {
+      if (!this.pixelated) {
+        context.imageSmoothingEnabled = true;
+        context.drawImage(image, 0, 0, width, height);
+        return true;
+      }
+      const blockWidth = Math.max(8, Math.min(PIXEL_COLUMNS, width));
+      const blockHeight = Math.max(1, Math.round(height * (blockWidth / width)));
+      const scratch = document.createElement("canvas");
+      scratch.width = blockWidth;
+      scratch.height = blockHeight;
+      const scratchContext = scratch.getContext("2d");
+      if (!scratchContext) return false;
+      scratchContext.imageSmoothingEnabled = true;
+      scratchContext.imageSmoothingQuality = "high";
+      scratchContext.drawImage(image, 0, 0, blockWidth, blockHeight);
+      context.imageSmoothingEnabled = false;
+      context.drawImage(scratch, 0, 0, blockWidth, blockHeight, 0, 0, width, height);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async showText(node: FsNode): Promise<void> {
@@ -155,7 +220,7 @@ export class FileViewer {
     this.pixelated = !this.pixelated;
     this.elements.pixelToggle.setAttribute("aria-pressed", String(this.pixelated));
     this.elements.pixelToggle.textContent = `PIXEL FILTER: ${this.pixelated ? "ON" : "OFF"}`;
-    this.elements.content.querySelector("img")?.classList.toggle("is-pixelated", this.pixelated);
+    this.paintImage();
   }
 
   private urlFor(file: File): string {
@@ -166,6 +231,7 @@ export class FileViewer {
   private cleanup(): void {
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = null;
+    this.imageSource = null;
     this.elements.content.querySelectorAll("audio, video").forEach((element) => (element as HTMLMediaElement).pause());
   }
 }

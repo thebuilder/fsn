@@ -23,6 +23,7 @@ function getElement<T extends HTMLElement>(id: string): T {
 const canvas = getElement<HTMLCanvasElement>("world");
 const breadcrumbs = getElement<HTMLElement>("breadcrumbs");
 const sourceLabel = getElement<HTMLElement>("source-label");
+const sceneTitle = getElement<HTMLElement>("scene-title");
 const directoryTitle = getElement<HTMLElement>("directory-title");
 const directorySummary = getElement<HTMLElement>("directory-summary");
 const detailsKind = getElement<HTMLElement>("details-kind");
@@ -63,6 +64,8 @@ const world = new WorldScene(canvas, {
   onOpen: (node) => void openNode(node),
   onHover: updateHover,
   onAim: updateAim,
+  onKeyboardNavigation: (active) => reticle.classList.toggle("is-keyboard-active", active),
+  onEnterArea: adoptArea,
 });
 
 function currentDirectory(): FsNode {
@@ -73,21 +76,58 @@ function currentChildren(): FsNode[] {
   return sortNodes(currentDirectory().children ?? []);
 }
 
-function renderDirectory(announce = true, direction: NavigationDirection = "backward"): void {
+/** Ancestry chains keyed by directory id, so the camera can re-enter a known area. */
+const ancestryById = new Map<string, FsNode[]>();
+let renderedDirectoryId: string | null = null;
+
+/** Updates every panel outside the 3D view. Never touches the camera. */
+function renderChrome(): void {
   const current = currentDirectory();
   const children = currentChildren();
+  ancestryById.set(current.id, [...ancestry]);
   sourceLabel.textContent = filesystem.sourceLabel;
   directoryTitle.textContent = current.name;
   const directories = children.filter((node) => node.kind === "directory").length;
   const files = children.length - directories;
   directorySummary.textContent = `${children.length} objects · ${directories} ${directories === 1 ? "directory" : "directories"} · ${files} ${files === 1 ? "file" : "files"}`;
   renderBreadcrumbs();
+  if (renderedDirectoryId !== current.id) {
+    renderedDirectoryId = current.id;
+    restartTitleTransition();
+  }
+}
+
+/** Replays the heading animation; the reflow is what lets it retrigger. */
+function restartTitleTransition(): void {
+  sceneTitle.classList.remove("is-entering");
+  void sceneTitle.offsetWidth;
+  sceneTitle.classList.add("is-entering");
+}
+
+function renderDirectory(announce = true, direction: NavigationDirection = "backward"): void {
+  renderChrome();
+  const current = currentDirectory();
+  const children = currentChildren();
   world.setDirectory(current, children, direction);
   if (announce) setStatus(`${current.name} mounted · ${children.length} objects`);
 }
 
+/** The camera flew into an area we have already built; adopt it without moving. */
+function adoptArea(directoryId: string): void {
+  const trail = ancestryById.get(directoryId);
+  if (!trail || trail[trail.length - 1].id === currentDirectory().id) return;
+  ancestry = [...trail];
+  renderChrome();
+  updateSelection(null);
+  setStatus(`Entered ${currentDirectory().name}`);
+}
+
+let previousCrumbIds: string[] = [];
+
 function renderBreadcrumbs(): void {
   breadcrumbs.replaceChildren();
+  const previousLeaf = previousCrumbIds[previousCrumbIds.length - 1];
+  let entering = 0;
   ancestry.forEach((node, index) => {
     if (index > 0) {
       const divider = document.createElement("span");
@@ -98,13 +138,22 @@ function renderBreadcrumbs(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = index === 0 ? node.name : trimName(node.name, 18);
-    button.ariaCurrent = index === ancestry.length - 1 ? "page" : "false";
+    const isLeaf = index === ancestry.length - 1;
+    button.ariaCurrent = isLeaf ? "page" : "false";
     button.addEventListener("click", () => {
       ancestry = ancestry.slice(0, index + 1);
       renderDirectory(true, "backward");
     });
+    // Animate crumbs that are genuinely new, plus the one that just became current
+    // (so stepping back reads as a change rather than a silent restyle).
+    if (!previousCrumbIds.includes(node.id) || (isLeaf && previousLeaf !== node.id)) {
+      button.classList.add("is-entering");
+      button.style.animationDelay = `${entering * 45}ms`;
+      entering += 1;
+    }
     breadcrumbs.append(button);
   });
+  previousCrumbIds = ancestry.map((node) => node.id);
 }
 
 function updateSelection(node: FsNode | null): void {
@@ -177,9 +226,20 @@ function goBack(): void {
   renderDirectory(true, "backward");
 }
 
+function goToRoot(): void {
+  if (ancestry.length <= 1) {
+    world.refocus();
+    setStatus(`Recentred on ${currentDirectory().name}`);
+    return;
+  }
+  ancestry = [ancestry[0]];
+  renderDirectory(true, "backward");
+}
+
 function setFilesystem(next: FilesystemRoot): void {
   filesystem = next;
   ancestry = [next.root];
+  ancestryById.clear();
   renderDirectory(true, "initial");
 }
 
@@ -260,15 +320,15 @@ folderFallback.addEventListener("change", () => {
   welcomeDialog.close();
   folderFallback.value = "";
 });
+getElement<HTMLAnchorElement>("brand-home").addEventListener("click", (event) => {
+  event.preventDefault();
+  goToRoot();
+});
 getElement<HTMLButtonElement>("welcome-demo").addEventListener("click", () => welcomeDialog.close());
 getElement<HTMLButtonElement>("welcome-folder").addEventListener("click", () => void chooseFolder());
 
 window.addEventListener("keydown", (event) => {
-  const isCameraNavigationKey = ["w", "a", "s", "d"].includes(event.key.toLowerCase()) || event.key.startsWith("Arrow");
-  if (isCameraNavigationKey && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLButtonElement)) {
-    reticle.classList.add("is-keyboard-active");
-    world.setKeyboardNavigationActive(true);
-  }
+  // Camera movement keys are owned by WorldScene; it reports back via onKeyboardNavigation.
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     if (!searchDialog.open) openSearch();
@@ -282,6 +342,16 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Backspace" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
     event.preventDefault();
     goBack();
+  }
+  // A dialog owns Escape while it is open — the browser closes it for us.
+  if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    goBack();
+  }
+  if (event.key === "Home" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
+    event.preventDefault();
+    world.refocus();
+    setStatus(`Recentred on ${currentDirectory().name}`);
   }
   const sceneFocused = document.activeElement === document.body || document.activeElement === canvas;
   if (event.key.toLowerCase() === "e" && sceneFocused) {
@@ -301,10 +371,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("pointerdown", (event) => {
-  if (event.button === 0) {
-    reticle.classList.remove("is-keyboard-active");
-    world.setKeyboardNavigationActive(false);
-  }
+  if (event.button === 0) world.setKeyboardNavigationActive(false);
 });
 
 renderDirectory(false, "initial");
