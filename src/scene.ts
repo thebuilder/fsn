@@ -16,11 +16,27 @@ type Placement = {
   node: FsNode;
   position: THREE.Vector3;
   scale: THREE.Vector3;
-  padPosition: THREE.Vector3;
-  padScale: THREE.Vector3;
+  /** Box the selection and aim outlines wrap. Encloses a plot's markers, not just its slab. */
+  outlinePosition: THREE.Vector3;
+  outlineScale: THREE.Vector3;
+  /** Height at which a label clears this object and whatever stands on it. */
+  labelY: number;
   /** Milliseconds into the reveal before this object starts to rise. */
   introDelay: number;
   /** Set once the instanced mesh exists, so hover can address this one instance. */
+  mesh?: THREE.InstancedMesh;
+  instanceIndex?: number;
+  /** Preview markers standing on a directory plot. Never picked; they ride with it. */
+  decor: Decor[];
+  /** Built on demand the first time this object is close enough on screen to name. */
+  label?: THREE.Sprite;
+};
+
+/** One preview marker on a directory plot. Decoration only: not selectable, not a node. */
+type Decor = {
+  category: FileCategory;
+  position: THREE.Vector3;
+  scale: THREE.Vector3;
   mesh?: THREE.InstancedMesh;
   instanceIndex?: number;
 };
@@ -30,6 +46,10 @@ export type NavigationDirection = "initial" | "forward" | "backward";
 type AreaLayout = {
   placements: Placement[];
   radius: number;
+  groundWidth: number;
+  groundDepth: number;
+  /** Top of the tallest thing standing here, including its label. */
+  peakHeight: number;
 };
 
 type DirectoryArea = {
@@ -37,7 +57,10 @@ type DirectoryArea = {
   group: THREE.Group;
   center: THREE.Vector3;
   radius: number;
+  peakHeight: number;
   placements: Placement[];
+  /** Every mesh holding preview markers, so the reveal can flag one update per mesh. */
+  decorMeshes: THREE.InstancedMesh[];
   pickMeshes: Map<THREE.InstancedMesh, Placement[]>;
   materials: THREE.Material[];
   labels: THREE.Sprite[];
@@ -63,7 +86,10 @@ type CameraFlight = {
 const palette: Record<FileCategory, number> = {
   directory: 0xf2557e,
   code: 0x5ce1cf,
-  image: 0xffb84a,
+  // Pre-compensated, not the swatch value. Three of the four lights are cyan-tinted,
+  // which starves the red channel: a literal 0xffb84a shades out to rgb(198,164,67),
+  // an olive. This renders at hue 37° against the legend's 36°, so images read orange.
+  image: 0xff9617,
   audio: 0xb88cff,
   video: 0xff8656,
   document: 0x8bbfff,
@@ -77,13 +103,76 @@ const palette: Record<FileCategory, number> = {
 /** The void colour. Background and fog must match exactly or the horizon shows a ring. */
 const BACKDROP = 0x05090a;
 
-const PAD_HEIGHT = 0.5;
-const PAD_Y = -0.12;
-const PAD_TOP = PAD_Y + PAD_HEIGHT / 2;
-const PAD_PADDING = 2.4;
-const PAD_MARGIN = 1.6;
-const GRID_Y = PAD_Y - PAD_HEIGHT / 2 - 0.04;
+/** The floor stays neutral so the category palette is the only colour carrying meaning. */
+const GROUND_COLOR = 0x14262a;
+const RIM_COLOR = 0x0b171a;
+const PLOT_COLOR = 0x2c3a44;
+
+/** The district floor: one slab per directory, with everything inside standing on it. */
+const GROUND_HEIGHT = 0.5;
+const GROUND_Y = -0.12;
+const GROUND_TOP = GROUND_Y + GROUND_HEIGHT / 2;
+/** Bare floor around the outermost block, proportional so a small district is not a plinth. */
+const GROUND_MARGIN_RATIO = 0.16;
+const GROUND_MARGIN_MIN = 2.6;
+const GROUND_MARGIN_MAX = 6.5;
+const RIM_OVERHANG = 1.1;
+const RIM_HEIGHT = 0.22;
+const GRID_Y = GROUND_Y - GROUND_HEIGHT / 2 - RIM_HEIGHT - 0.04;
 const AREA_MARGIN = 22;
+
+/** Towers pack tight within a block; blocks are separated by a street. */
+/**
+ * A little over one tower wide. Tighter than this and a block of same-coloured towers
+ * fuses into a single mass from any angle low enough to see the skyline.
+ */
+const TOWER_GAP = 1.7;
+const PLOT_GAP = 1.7;
+const BLOCK_AISLE = 3.8;
+
+/**
+ * Each row further from the camera carries its label a lane higher, so a label is never
+ * hidden behind the row in front of it. Side-by-side neighbours need no stagger, because
+ * `TOWER_GAP` already spaces them further apart than a label is wide.
+ *
+ * The lane cycles rather than climbing. Only adjacent rows can overlap on screen — rows
+ * further apart are already separated by perspective — so a few distinct heights is all
+ * it takes. Left to accumulate, a directory deep enough to need ten rows would leave its
+ * back labels floating ten units over their towers, attached to nothing.
+ */
+const LABEL_LANE = 1;
+const LABEL_LANE_CYCLE = 3;
+
+/** A directory is a low plot of land carrying one marker per child. */
+const PLOT_HEIGHT = 0.62;
+const PLOT_TOP = GROUND_TOP + PLOT_HEIGHT;
+const PLOT_PADDING = 1.05;
+const PLOT_MIN_WIDTH = 4.2;
+const MARKER_CELL = 1;
+const MARKER_FOOTPRINT = 0.6;
+const MARKER_HEIGHT = 1.15;
+const MARKER_MAX_COLUMNS = 6;
+
+/** Blocks are laid out in this order, so a directory's shape is stable across visits. */
+const CATEGORY_ORDER: FileCategory[] = [
+  "directory", "code", "document", "image", "audio", "video", "model", "font", "archive", "system", "unknown",
+];
+
+/**
+ * Labels are the first thing to clutter a tight layout, so only the nearest few on
+ * screen are drawn, re-picked as the camera moves. Sprites are built the first time a
+ * label is chosen and cached: 250 of them up front is both a stall and a lot of texture
+ * memory, and most of a large directory is never looked at closely.
+ */
+const LABEL_VISIBLE = 34;
+const LABEL_MAX_DISTANCE = 150;
+/** Directories are how you travel, so they outrank a file at the same distance. */
+const LABEL_DIRECTORY_BONUS = 22;
+const LABEL_SELECT_INTERVAL = 120;
+/** Cap on canvases rasterised per pick, so flying fast staggers the work over frames. */
+const LABEL_BUILDS_PER_TICK = 4;
+const LABEL_CACHE_LIMIT = 128;
+const EASE_LABEL = 0.000004;
 
 const MOVE_CODES = new Set([
   "KeyW", "KeyA", "KeyS", "KeyD",
@@ -118,50 +207,179 @@ function seededHash(value: string): number {
   return Math.abs(hash >>> 0);
 }
 
+type Footprint = { width: number; depth: number };
+type Marker = { category: FileCategory; x: number; z: number };
+type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
+/** `lane` counts rows back from the front of the pack, for label stacking. */
+type Placed<T> = { item: T; x: number; z: number; lane: number };
+
+/** Comparator that restores the order items arrived in, captured before any sorting. */
+function byListing(boxes: Box[]): (a: Box, b: Box) => number {
+  const rank = new Map(boxes.map((box, index) => [box.node.id, index]));
+  return (a, b) => (rank.get(a.node.id) ?? 0) - (rank.get(b.node.id) ?? 0);
+}
+type PackResult<T> = { placed: Placed<T>[]; width: number; depth: number };
+
 /**
- * Lays a directory out as a roughly square block centred on the origin. The cell
- * size is derived from the largest object in the directory so that pads can never
- * touch, and the block grows on both axes rather than becoming a long corridor.
+ * Flows items left to right into rows no wider than `limit`, then centres each row on
+ * the origin. A row is only as deep as its own deepest item, so a block of towers stays
+ * tight instead of inheriting the largest footprint in the directory.
+ *
+ * Items arrive sorted tallest first, which fills the rows back to front, and `orderInRow`
+ * then restores the caller's reading order across each row. The result steps down towards
+ * the camera — nothing tall stands in front of anything short — while each row still
+ * reads left to right in listing order.
+ */
+function shelfPack<T extends Footprint>(
+  items: T[],
+  gap: number,
+  limit: number,
+  orderInRow?: (a: T, b: T) => number,
+): PackResult<T> {
+  const rows: { items: T[]; width: number; depth: number }[] = [];
+  for (const item of items) {
+    let row = rows[rows.length - 1];
+    if (!row || row.width + gap + item.width > limit) {
+      row = { items: [], width: 0, depth: 0 };
+      rows.push(row);
+    }
+    if (row.items.length) row.width += gap;
+    row.items.push(item);
+    row.width += item.width;
+    row.depth = Math.max(row.depth, item.depth);
+  }
+
+  if (orderInRow) rows.forEach((row) => row.items.sort(orderInRow));
+
+  const width = Math.max(...rows.map((row) => row.width), 0);
+  const depth = rows.reduce((total, row) => total + row.depth, 0) + gap * Math.max(rows.length - 1, 0);
+  const placed: Placed<T>[] = [];
+  let z = -depth / 2;
+  rows.forEach((row, index) => {
+    let x = -row.width / 2;
+    row.items.forEach((item) => {
+      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane: rows.length - 1 - index });
+      x += item.width + gap;
+    });
+    z += row.depth + gap;
+  });
+  return { placed, width, depth };
+}
+
+/** A row width that lands the pack near `aspect`:1 rather than one long corridor. */
+function packWidth(items: Footprint[], gap: number, aspect: number): number {
+  const area = items.reduce((total, item) => total + (item.width + gap) * (item.depth + gap), 0);
+  return Math.max(Math.max(...items.map((item) => item.width), 1), Math.sqrt(area * aspect));
+}
+
+/** A file is a tower: footprint roughly constant, height from its size on disk. */
+function towerBox(node: FsNode): Box {
+  const jitter = seededHash(node.id);
+  return {
+    node,
+    width: 1.45 + (jitter % 4) * 0.1,
+    depth: 1.45,
+    height: Math.max(0.55, Math.min(7, Math.log2((node.size ?? 1_024) / 1024 + 1) * 0.62)),
+    markers: [],
+  };
+}
+
+/**
+ * A directory is a plot of land: its area grows with how much it holds, and it carries
+ * one marker per child, coloured by that child's type. The markers are all the same
+ * height on purpose — sizes inside a directory are not known without opening every file
+ * in it, and a varied skyline would be encoding data that was never read.
+ */
+function plotBox(node: FsNode): Box {
+  const peek = node.peek;
+  const total = peek?.total ?? node.children?.length ?? 0;
+  const columns = THREE.MathUtils.clamp(Math.round(Math.sqrt(total)), 1, MARKER_MAX_COLUMNS);
+  const rows = THREE.MathUtils.clamp(Math.ceil(total / columns), 1, MARKER_MAX_COLUMNS);
+  const shown = Math.min(total, columns * rows);
+
+  const markers: Marker[] = [];
+  for (let index = 0; index < shown; index += 1) {
+    markers.push({
+      category: peek?.categories[index] ?? "unknown",
+      x: ((index % columns) - (columns - 1) / 2) * MARKER_CELL,
+      z: (Math.floor(index / columns) - (rows - 1) / 2) * MARKER_CELL,
+    });
+  }
+
+  return {
+    node,
+    width: Math.max(PLOT_MIN_WIDTH, columns * MARKER_CELL + PLOT_PADDING * 2),
+    depth: Math.max(PLOT_MIN_WIDTH * 0.8, rows * MARKER_CELL + PLOT_PADDING * 2),
+    height: PLOT_HEIGHT,
+    markers,
+  };
+}
+
+function toPlacement(box: Box, x: number, z: number, labelLift: number): Placement {
+  const decor = box.markers.map((marker) => ({
+    category: marker.category,
+    position: new THREE.Vector3(x + marker.x, PLOT_TOP + MARKER_HEIGHT / 2, z + marker.z),
+    scale: new THREE.Vector3(MARKER_FOOTPRINT, MARKER_HEIGHT, MARKER_FOOTPRINT),
+  }));
+  const outlineHeight = box.markers.length ? PLOT_HEIGHT + MARKER_HEIGHT : box.height;
+  return {
+    node: box.node,
+    position: new THREE.Vector3(x, GROUND_TOP + box.height / 2, z),
+    scale: new THREE.Vector3(box.width, box.height, box.depth),
+    outlinePosition: new THREE.Vector3(x, GROUND_TOP + outlineHeight / 2, z),
+    outlineScale: new THREE.Vector3(box.width, outlineHeight, box.depth),
+    labelY: labelLift + (box.markers.length ? PLOT_TOP + MARKER_HEIGHT + 0.95 : GROUND_TOP + box.height + 0.82),
+    introDelay: 0,
+    decor,
+  };
+}
+
+/**
+ * Lays a directory out as a city block plan on one shared floor. Objects of the same
+ * category are packed together into a block and the blocks are flowed across the
+ * district with streets between them, so the palette reads as neighbourhoods rather
+ * than as scattered confetti — and so a plot's size is the only thing on screen that
+ * varies with what a directory actually holds.
  */
 function buildLayout(nodes: FsNode[]): AreaLayout {
-  if (!nodes.length) return { placements: [], radius: 14 };
+  if (!nodes.length) return { placements: [], radius: 16, groundWidth: 22, groundDepth: 18, peakHeight: 2 };
 
-  const boxes = nodes.map((node) => {
-    const jitter = seededHash(node.id);
-    const isDirectory = node.kind === "directory";
-    return {
-      node,
-      width: isDirectory ? 4.4 : 1.45 + (jitter % 4) * 0.1,
-      depth: isDirectory ? 3.6 : 1.45,
-      height: isDirectory
-        ? 1.55 + Math.min(node.children?.length ?? 0, 12) * 0.07
-        : Math.max(0.55, Math.min(7, Math.log2((node.size ?? 1_024) / 1024 + 1) * 0.62)),
-    };
+  const byCategory = new Map<FileCategory, FsNode[]>();
+  for (const node of nodes) {
+    const category = categoryOf(node);
+    const bucket = byCategory.get(category);
+    if (bucket) bucket.push(node);
+    else byCategory.set(category, [node]);
+  }
+
+  const blocks = CATEGORY_ORDER.flatMap((category, categoryRank) => {
+    const members = byCategory.get(category);
+    if (!members) return [];
+    const isDirectory = category === "directory";
+    const boxes = members.map((node) => (isDirectory ? plotBox(node) : towerBox(node)));
+    const gap = isDirectory ? PLOT_GAP : TOWER_GAP;
+    // Tallest to the back, then alphabetical across each row. Plots are all the same
+    // low height, so for those the height sort is a no-op and listing order stands.
+    const rowOrder = byListing(boxes);
+    boxes.sort((a, b) => b.height - a.height);
+    const packed = shelfPack(boxes, gap, packWidth(boxes, gap, 1.5), rowOrder);
+    return [{
+      packed,
+      width: packed.width,
+      depth: packed.depth,
+      categoryRank,
+      peak: Math.max(...boxes.map((box) => box.height)),
+    }];
   });
 
-  const padWidth = Math.max(...boxes.map((box) => box.width)) + PAD_PADDING * 2;
-  const padDepth = Math.max(...boxes.map((box) => box.depth)) + PAD_PADDING * 2;
-  const cellX = padWidth + PAD_MARGIN;
-  const cellZ = padDepth + PAD_MARGIN;
-
-  const columns = Math.max(1, Math.round(Math.sqrt(boxes.length * 1.4)));
-  const rows = Math.ceil(boxes.length / columns);
-
-  const placements = boxes.map((box, index) => {
-    const row = Math.floor(index / columns);
-    const column = index % columns;
-    const rowCount = row === rows - 1 ? boxes.length - row * columns : columns;
-    const x = (column - (rowCount - 1) / 2) * cellX;
-    const z = (row - (rows - 1) / 2) * cellZ;
-    return {
-      node: box.node,
-      position: new THREE.Vector3(x, PAD_TOP + box.height / 2, z),
-      scale: new THREE.Vector3(box.width, box.height, box.depth),
-      padPosition: new THREE.Vector3(x, PAD_Y, z),
-      padScale: new THREE.Vector3(padWidth, PAD_HEIGHT, padDepth),
-      introDelay: 0,
-    };
-  });
+  // The same rule one level up: a block of tall towers goes behind the short ones so it
+  // cannot wall off the district, while each row still runs in category order.
+  const blockOrder = (a: typeof blocks[number], b: typeof blocks[number]) => a.categoryRank - b.categoryRank;
+  blocks.sort((a, b) => b.peak - a.peak);
+  const district = shelfPack(blocks, BLOCK_AISLE, packWidth(blocks, BLOCK_AISLE, 1.7), blockOrder);
+  const placements = district.placed.flatMap(({ item: block, x: blockX, z: blockZ, lane: blockLane }) =>
+    block.packed.placed.map(({ item: box, x, z, lane }) =>
+      toPlacement(box, blockX + x, blockZ + z, ((blockLane + lane) % LABEL_LANE_CYCLE) * LABEL_LANE)));
 
   // Ripple the reveal outwards from the centre, capped so a huge directory
   // takes no longer to land than a small one.
@@ -170,8 +388,20 @@ function buildLayout(nodes: FsNode[]): AreaLayout {
     placement.introDelay = (Math.hypot(placement.position.x, placement.position.z) / furthest) * INTRO_STAGGER;
   });
 
-  const radius = Math.hypot(columns * cellX, rows * cellZ) / 2 + 6;
-  return { placements, radius };
+  const margin = THREE.MathUtils.clamp(
+    Math.max(district.width, district.depth) * GROUND_MARGIN_RATIO,
+    GROUND_MARGIN_MIN,
+    GROUND_MARGIN_MAX,
+  );
+  const groundWidth = district.width + margin * 2;
+  const groundDepth = district.depth + margin * 2;
+  return {
+    placements,
+    radius: Math.hypot(groundWidth, groundDepth) / 2 + 6,
+    groundWidth,
+    groundDepth,
+    peakHeight: Math.max(...placements.map((p) => p.labelY), 0),
+  };
 }
 
 function makeLabel(text: string, color: string): THREE.Sprite {
@@ -293,6 +523,13 @@ export class WorldScene {
   private readonly scratchColor = new THREE.Color();
   private readonly scratchMatrix = new THREE.Matrix4();
   private readonly scratchVector = new THREE.Vector3();
+  private readonly labelFrustum = new THREE.Frustum();
+  private readonly labelViewProjection = new THREE.Matrix4();
+  /** Given a little volume so labels fade in before their anchor crosses the screen edge. */
+  private readonly labelSphere = new THREE.Sphere(new THREE.Vector3(), 2.5);
+  private readonly labelPoint = new THREE.Vector3();
+  private labelCandidates: { placement: Placement; area: DirectoryArea; score: number }[] = [];
+  private lastLabelSelect = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly callbacks: SceneCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
@@ -392,8 +629,31 @@ export class WorldScene {
     const placements = layout.placements;
     placements.forEach((placement) => {
       placement.position.add(center);
-      placement.padPosition.add(center);
+      placement.outlinePosition.add(center);
+      placement.decor.forEach((decor) => decor.position.add(center));
     });
+
+    const materials: THREE.Material[] = [];
+    const matrix = new THREE.Matrix4();
+
+    // The floor of the district, plus a wider lip underneath so it reads as a solid
+    // block of land sitting in the void rather than a sheet of paper.
+    const rimMaterial = new THREE.MeshLambertMaterial({ color: RIM_COLOR, emissive: RIM_COLOR, emissiveIntensity: 0.1 });
+    rememberActiveLook(rimMaterial);
+    materials.push(rimMaterial);
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), rimMaterial);
+    rim.scale.set(layout.groundWidth + RIM_OVERHANG * 2, RIM_HEIGHT, layout.groundDepth + RIM_OVERHANG * 2);
+    rim.position.set(center.x, GROUND_Y - GROUND_HEIGHT / 2 - RIM_HEIGHT / 2, center.z);
+    group.add(rim);
+
+    const groundMaterial = new THREE.MeshLambertMaterial({ color: GROUND_COLOR, emissive: GROUND_COLOR, emissiveIntensity: 0.16 });
+    rememberActiveLook(groundMaterial);
+    materials.push(groundMaterial);
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), groundMaterial);
+    ground.scale.set(layout.groundWidth, GROUND_HEIGHT, layout.groundDepth);
+    ground.position.set(center.x, GROUND_Y, center.z);
+    ground.receiveShadow = true;
+    group.add(ground);
 
     const grouped = new Map<FileCategory, Placement[]>();
     placements.forEach((placement) => {
@@ -402,13 +662,15 @@ export class WorldScene {
     });
 
     const pickMeshes = new Map<THREE.InstancedMesh, Placement[]>();
-    const materials: THREE.Material[] = [];
-    const matrix = new THREE.Matrix4();
     for (const [category, categoryPlacements] of grouped) {
+      // A directory's body is the plot itself, kept neutral: the markers standing on it
+      // are what carry colour, and a crimson slab under them would drown them out.
+      const isDirectory = category === "directory";
+      const bodyColor = isDirectory ? PLOT_COLOR : palette[category];
       const buildingMaterial = new THREE.MeshLambertMaterial({
-        color: palette[category],
-        emissive: palette[category],
-        emissiveIntensity: category === "directory" ? 0.14 : 0.05,
+        color: bodyColor,
+        emissive: bodyColor,
+        emissiveIntensity: isDirectory ? 0.2 : 0.05,
       });
       rememberActiveLook(buildingMaterial);
       materials.push(buildingMaterial);
@@ -416,7 +678,7 @@ export class WorldScene {
       buildingMesh.castShadow = true;
       buildingMesh.receiveShadow = true;
       categoryPlacements.forEach((placement, index) => {
-        matrix.compose(placement.position, new THREE.Quaternion(), placement.scale);
+        matrix.compose(placement.position, NO_ROTATION, placement.scale);
         buildingMesh.setMatrixAt(index, matrix);
       });
       buildingMesh.instanceMatrix.needsUpdate = true;
@@ -431,39 +693,44 @@ export class WorldScene {
       buildingMesh.computeBoundingSphere();
       pickMeshes.set(buildingMesh, categoryPlacements);
       group.add(buildingMesh);
-
-      const islandColor = category === "directory" ? 0x7d1734 : new THREE.Color(palette[category]).multiplyScalar(0.28).getHex();
-      const islandMaterial = new THREE.MeshLambertMaterial({
-        color: islandColor,
-        emissive: islandColor,
-        emissiveIntensity: 0.18,
-      });
-      rememberActiveLook(islandMaterial);
-      materials.push(islandMaterial);
-      const islandMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), islandMaterial, categoryPlacements.length);
-      islandMesh.receiveShadow = true;
-      categoryPlacements.forEach((placement, index) => {
-        matrix.compose(placement.padPosition, new THREE.Quaternion(), placement.padScale);
-        islandMesh.setMatrixAt(index, matrix);
-      });
-      islandMesh.instanceMatrix.needsUpdate = true;
-      islandMesh.computeBoundingBox();
-      islandMesh.computeBoundingSphere();
-      group.add(islandMesh);
     }
 
+    // Preview markers, batched by their own category across every plot in the area.
+    // Deliberately outside `pickMeshes`: the ray ignores them, so clicking a marker
+    // falls through to the plot beneath it and selects the directory, as it should.
+    const decorMeshes: THREE.InstancedMesh[] = [];
+    const markersByCategory = new Map<FileCategory, Decor[]>();
+    placements.forEach((placement) => placement.decor.forEach((decor) => {
+      const bucket = markersByCategory.get(decor.category);
+      if (bucket) bucket.push(decor);
+      else markersByCategory.set(decor.category, [decor]);
+    }));
+    for (const [category, markers] of markersByCategory) {
+      const markerMaterial = new THREE.MeshLambertMaterial({
+        color: palette[category],
+        emissive: palette[category],
+        emissiveIntensity: 0.14,
+      });
+      rememberActiveLook(markerMaterial);
+      materials.push(markerMaterial);
+      const markerMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), markerMaterial, markers.length);
+      markerMesh.castShadow = true;
+      markers.forEach((decor, index) => {
+        matrix.compose(decor.position, NO_ROTATION, decor.scale);
+        markerMesh.setMatrixAt(index, matrix);
+        decor.mesh = markerMesh;
+        decor.instanceIndex = index;
+      });
+      markerMesh.instanceMatrix.needsUpdate = true;
+      markerMesh.computeBoundingBox();
+      markerMesh.computeBoundingSphere();
+      decorMeshes.push(markerMesh);
+      group.add(markerMesh);
+    }
+
+    // Labels are not built here. `selectLabels` names whatever is nearest on screen and
+    // creates the sprite at that moment, so this list fills in as the camera explores.
     const labels: THREE.Sprite[] = [];
-    placements.slice(0, 32).forEach((placement) => {
-      const category = categoryOf(placement.node);
-      const label = makeLabel(placement.node.name, `#${palette[category].toString(16).padStart(6, "0")}`);
-      label.position.copy(placement.position).setY(placement.position.y + placement.scale.y / 2 + 0.92);
-      label.scale.set(placement.node.kind === "directory" ? 5.8 : 4.4, placement.node.kind === "directory" ? 1.08 : 0.82, 1);
-      label.material.userData.activeOpacity = 1;
-      label.userData.introDelay = placement.introDelay;
-      materials.push(label.material);
-      labels.push(label);
-      group.add(label);
-    });
 
     const beaconSize = Math.max(48, layout.radius * 2.4);
     const beacon = new THREE.Mesh(new THREE.PlaneGeometry(beaconSize, beaconSize), new THREE.MeshBasicMaterial({
@@ -483,8 +750,8 @@ export class WorldScene {
 
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
     return {
-      id, group, center: center.clone(), radius: layout.radius,
-      placements, pickMeshes, materials, labels,
+      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
+      placements, decorMeshes, pickMeshes, materials, labels,
       activation: 1, activationTarget: 1,
     };
   }
@@ -536,6 +803,115 @@ export class WorldScene {
       candidate.activationTarget = candidate.id === area.id ? 1 : 0;
     });
     this.focusLightOn(area);
+  }
+
+  /**
+   * Re-picks which objects are named, then eases every label towards being shown or
+   * hidden. The pick is throttled because it is a scan over every placement in the
+   * world; the fade runs every frame so labels never pop.
+   */
+  private updateLabels(delta: number): void {
+    const now = performance.now();
+    if (now - this.lastLabelSelect > LABEL_SELECT_INTERVAL) {
+      this.lastLabelSelect = now;
+      this.selectLabels(now);
+    }
+    const step = 1 - Math.pow(EASE_LABEL, delta);
+    this.areas.forEach((area) => {
+      area.labels.forEach((sprite) => {
+        const data = sprite.material.userData;
+        data.proximityFade += (data.proximityTarget - data.proximityFade) * step;
+        writeLabelOpacity(sprite, area.activation);
+      });
+    });
+  }
+
+  /** Chooses the nearest labels that are actually on screen, nearest first. */
+  private selectLabels(now: number): void {
+    this.labelViewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    this.labelFrustum.setFromProjectionMatrix(this.labelViewProjection);
+
+    const candidates = this.labelCandidates;
+    candidates.length = 0;
+    this.areas.forEach((area) => {
+      if (this.camera.position.distanceTo(area.center) > area.radius + LABEL_MAX_DISTANCE) return;
+      for (const placement of area.placements) {
+        this.labelPoint.set(placement.position.x, placement.labelY, placement.position.z);
+        const distance = this.camera.position.distanceTo(this.labelPoint);
+        if (distance > LABEL_MAX_DISTANCE) continue;
+        this.labelSphere.center.copy(this.labelPoint);
+        if (!this.labelFrustum.intersectsSphere(this.labelSphere)) continue;
+        const bonus = placement.node.kind === "directory" ? LABEL_DIRECTORY_BONUS : 0;
+        candidates.push({ placement, area, score: distance - bonus });
+      }
+    });
+    candidates.sort((a, b) => a.score - b.score);
+
+    const shown = new Set<Placement>();
+    let built = 0;
+    for (const candidate of candidates) {
+      if (shown.size >= LABEL_VISIBLE) break;
+      let sprite = candidate.placement.label;
+      if (!sprite) {
+        // Out of build budget: leave it for the next pick rather than stalling the frame.
+        if (built >= LABEL_BUILDS_PER_TICK) continue;
+        sprite = this.buildLabel(candidate.placement, candidate.area);
+        built += 1;
+      }
+      sprite.userData.lastSeen = now;
+      sprite.material.userData.proximityTarget = 1;
+      shown.add(candidate.placement);
+    }
+
+    this.areas.forEach((area) => area.labels.forEach((sprite) => {
+      if (!shown.has(sprite.userData.placement as Placement)) sprite.material.userData.proximityTarget = 0;
+    }));
+
+    this.trimLabelCache();
+  }
+
+  private buildLabel(placement: Placement, area: DirectoryArea): THREE.Sprite {
+    const isDirectory = placement.node.kind === "directory";
+    const color = palette[categoryOf(placement.node)];
+    const sprite = makeLabel(placement.node.name, `#${color.toString(16).padStart(6, "0")}`);
+    sprite.position.set(placement.position.x, placement.labelY, placement.position.z);
+    sprite.scale.set(isDirectory ? 5.2 : 3.1, isDirectory ? 0.97 : 0.58, 1);
+    sprite.userData.placement = placement;
+    sprite.userData.introDelay = placement.introDelay;
+    sprite.material.userData.proximityFade = 0;
+    sprite.material.userData.proximityTarget = 1;
+    // A label born mid-reveal joins the ripple; one born later has no catching up to do.
+    sprite.material.userData.introFade = this.intro?.area === area ? 0 : 1;
+    sprite.visible = false;
+    placement.label = sprite;
+    area.labels.push(sprite);
+    area.group.add(sprite);
+    return sprite;
+  }
+
+  /** Drops the least recently shown labels once the cache outgrows its budget. */
+  private trimLabelCache(): void {
+    let total = 0;
+    this.areas.forEach((area) => (total += area.labels.length));
+    if (total <= LABEL_CACHE_LIMIT) return;
+
+    const stale: { sprite: THREE.Sprite; area: DirectoryArea }[] = [];
+    this.areas.forEach((area) => area.labels.forEach((sprite) => {
+      const data = sprite.material.userData;
+      if (data.proximityTarget === 0 && data.proximityFade < 0.02) stale.push({ sprite, area });
+    }));
+    stale.sort((a, b) => (a.sprite.userData.lastSeen as number) - (b.sprite.userData.lastSeen as number));
+
+    for (const entry of stale) {
+      if (total <= LABEL_CACHE_LIMIT) break;
+      const placement = entry.sprite.userData.placement as Placement;
+      placement.label = undefined;
+      entry.area.labels.splice(entry.area.labels.indexOf(entry.sprite), 1);
+      entry.area.group.remove(entry.sprite);
+      entry.sprite.material.map?.dispose();
+      entry.sprite.material.dispose();
+      total -= 1;
+    }
   }
 
   /** Eases every area towards its activation target so directories cross-fade. */
@@ -619,10 +995,16 @@ export class WorldScene {
     shadowCamera.updateProjectionMatrix();
   }
 
+  /**
+   * Frames the whole district from a raised three-quarter angle. Packing the objects
+   * tightly shrank the footprint without shrinking the towers, so the distance has to
+   * clear the skyline as well as the floor or the view ends up looking along the
+   * streets at eye level instead of over the city.
+   */
   private flyToArea(area: DirectoryArea, immediate: boolean): void {
-    const distance = Math.max(20, area.radius * 1.5);
-    const toTarget = area.center.clone().add(new THREE.Vector3(0, 1.2, 0));
-    const toPosition = area.center.clone().add(new THREE.Vector3(0, distance * 0.52, distance));
+    const distance = Math.max(22, area.radius * 1.7, area.peakHeight * 3.6);
+    const toTarget = area.center.clone().add(new THREE.Vector3(0, area.peakHeight * 0.3, 0));
+    const toPosition = area.center.clone().add(new THREE.Vector3(0, distance * 0.68, distance));
     this.flyTo(toTarget, toPosition, immediate);
   }
 
@@ -660,7 +1042,7 @@ export class WorldScene {
     if (!area.placements.length) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     this.intro = { area, startedAt: performance.now() };
-    area.labels.forEach((label) => (label.material.opacity = 0));
+    area.labels.forEach((label) => (label.material.userData.introFade = 0));
     this.applyIntro(0);
   }
 
@@ -674,26 +1056,36 @@ export class WorldScene {
     const rotation = new THREE.Quaternion();
     let settled = true;
 
-    intro.area.pickMeshes.forEach((placements, mesh) => {
-      placements.forEach((placement, index) => {
-        const progress = THREE.MathUtils.clamp((elapsed - placement.introDelay) / INTRO_RISE, 0, 1);
-        if (progress < 1) settled = false;
-        const eased = 1 - Math.pow(1 - progress, 3);
-        const height = Math.max(placement.scale.y * eased, 0.0001);
-        position.set(placement.position.x, PAD_TOP + height / 2, placement.position.z);
+    intro.area.placements.forEach((placement) => {
+      const progress = THREE.MathUtils.clamp((elapsed - placement.introDelay) / INTRO_RISE, 0, 1);
+      if (progress < 1) settled = false;
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const height = Math.max(placement.scale.y * eased, 0.0001);
+      if (placement.mesh && placement.instanceIndex !== undefined) {
+        position.set(placement.position.x, GROUND_TOP + height / 2, placement.position.z);
         scale.set(placement.scale.x, height, placement.scale.z);
         matrix.compose(position, rotation, scale);
-        mesh.setMatrixAt(index, matrix);
+        placement.mesh.setMatrixAt(placement.instanceIndex, matrix);
+      }
+      // Markers grow on the plot's rising surface, so a plot never sprouts through them.
+      placement.decor.forEach((decor) => {
+        if (!decor.mesh || decor.instanceIndex === undefined) return;
+        const markerHeight = Math.max(decor.scale.y * eased, 0.0001);
+        position.set(decor.position.x, GROUND_TOP + height + markerHeight / 2, decor.position.z);
+        scale.set(decor.scale.x, markerHeight, decor.scale.z);
+        matrix.compose(position, rotation, scale);
+        decor.mesh.setMatrixAt(decor.instanceIndex, matrix);
       });
-      mesh.instanceMatrix.needsUpdate = true;
     });
+    intro.area.pickMeshes.forEach((_placements, mesh) => (mesh.instanceMatrix.needsUpdate = true));
+    intro.area.decorMeshes.forEach((mesh) => (mesh.instanceMatrix.needsUpdate = true));
 
+    // Opacity itself belongs to `updateLabels`; the reveal only drives its own factor.
     intro.area.labels.forEach((label) => {
       const delay = (label.userData.introDelay as number) + INTRO_RISE * 0.6;
       const progress = THREE.MathUtils.clamp((elapsed - delay) / INTRO_LABEL_FADE, 0, 1);
       if (progress < 1) settled = false;
-      const target = typeof label.material.userData.activeOpacity === "number" ? label.material.userData.activeOpacity : 1;
-      label.material.opacity = target * progress;
+      label.material.userData.introFade = progress;
     });
 
     return settled;
@@ -705,16 +1097,20 @@ export class WorldScene {
     if (!intro) return;
     const matrix = new THREE.Matrix4();
     const rotation = new THREE.Quaternion();
-    intro.area.pickMeshes.forEach((placements, mesh) => {
-      placements.forEach((placement, index) => {
+    intro.area.placements.forEach((placement) => {
+      if (placement.mesh && placement.instanceIndex !== undefined) {
         matrix.compose(placement.position, rotation, placement.scale);
-        mesh.setMatrixAt(index, matrix);
+        placement.mesh.setMatrixAt(placement.instanceIndex, matrix);
+      }
+      placement.decor.forEach((decor) => {
+        if (!decor.mesh || decor.instanceIndex === undefined) return;
+        matrix.compose(decor.position, rotation, decor.scale);
+        decor.mesh.setMatrixAt(decor.instanceIndex, matrix);
       });
-      mesh.instanceMatrix.needsUpdate = true;
     });
-    // The reveal may be cut short by navigating on, so restore the look the area
-    // is actually entitled to rather than assuming it is still the active one.
-    intro.area.labels.forEach((label) => applyAreaLook(label.material, intro.area.activation));
+    intro.area.pickMeshes.forEach((_placements, mesh) => (mesh.instanceMatrix.needsUpdate = true));
+    intro.area.decorMeshes.forEach((mesh) => (mesh.instanceMatrix.needsUpdate = true));
+    intro.area.labels.forEach((label) => (label.material.userData.introFade = 1));
     this.intro = null;
   }
 
@@ -856,8 +1252,8 @@ export class WorldScene {
     this.aimed = nextAim;
     // Sliding from a stale position would read as a glitch, so snap on first acquire.
     if (nextAim && acquiredFromNothing) {
-      this.aimBox.position.copy(nextAim.position);
-      this.aimBox.scale.copy(nextAim.scale).multiplyScalar(1.14);
+      this.aimBox.position.copy(nextAim.outlinePosition);
+      this.aimBox.scale.copy(nextAim.outlineScale).multiplyScalar(1.14);
     }
     this.callbacks.onAim(nextAim?.node ?? null);
   }
@@ -866,8 +1262,8 @@ export class WorldScene {
   private updateAimBox(delta: number): void {
     const step = 1 - Math.pow(EASE_AIM, delta);
     if (this.aimed) {
-      this.aimBox.position.lerp(this.aimed.position, step);
-      this.aimBox.scale.lerp(this.scratchVector.copy(this.aimed.scale).multiplyScalar(1.14), step);
+      this.aimBox.position.lerp(this.aimed.outlinePosition, step);
+      this.aimBox.scale.lerp(this.scratchVector.copy(this.aimed.outlineScale).multiplyScalar(1.14), step);
     }
     const target = this.keyboardNavigationActive && this.aimed ? 0.5 : 0;
     this.aimBoxOpacity += (target - this.aimBoxOpacity) * step;
@@ -898,18 +1294,28 @@ export class WorldScene {
   private writeHover(placement: Placement, strength: number): void {
     const mesh = placement.mesh;
     if (!mesh || placement.instanceIndex === undefined) return;
+    const lift = HOVER_LIFT * strength;
     mesh.setColorAt(placement.instanceIndex, this.scratchColor.copy(NEUTRAL_TINT).lerp(HOVER_TINT, strength));
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    this.scratchVector.copy(placement.position).setY(placement.position.y + HOVER_LIFT * strength);
+    this.scratchVector.copy(placement.position).setY(placement.position.y + lift);
     this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, placement.scale);
     mesh.setMatrixAt(placement.instanceIndex, this.scratchMatrix);
     mesh.instanceMatrix.needsUpdate = true;
+
+    // A plot lifting out from under its own markers would tear the preview apart.
+    placement.decor.forEach((decor) => {
+      if (!decor.mesh || decor.instanceIndex === undefined) return;
+      this.scratchVector.copy(decor.position).setY(decor.position.y + lift);
+      this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, decor.scale);
+      decor.mesh.setMatrixAt(decor.instanceIndex, this.scratchMatrix);
+      decor.mesh.instanceMatrix.needsUpdate = true;
+    });
   }
 
   private selectPlacement(placement: Placement): void {
     this.selectionBox.visible = true;
-    this.selectionBox.position.copy(placement.position);
-    this.selectionBox.scale.copy(placement.scale).multiplyScalar(1.06);
+    this.selectionBox.position.copy(placement.outlinePosition);
+    this.selectionBox.scale.copy(placement.outlineScale).multiplyScalar(1.06);
     this.callbacks.onSelect(placement.node);
   }
 
@@ -1025,6 +1431,8 @@ export class WorldScene {
 
     this.updateActivation(delta);
     if (this.intro && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    // After the reveal, which owns the intro factor these fades multiply against.
+    this.updateLabels(delta);
     // After the reveal, so the lift survives the intro's matrix rewrites.
     this.updateHoverHighlight(delta);
     this.updateAimBox(delta);
@@ -1070,14 +1478,22 @@ function rememberActiveLook(material: THREE.MeshLambertMaterial): void {
   material.userData.activeEmissiveIntensity = material.emissiveIntensity;
 }
 
+/**
+ * The one place a label's opacity is written. Three independent factors multiply: how
+ * far into the reveal it is, whether the camera currently has it selected for display,
+ * and whether its district is the active one. Splitting them across the animation, the
+ * label picker and the cross-fade is what made them fight each other.
+ */
+function writeLabelOpacity(sprite: THREE.Sprite, activation: number): void {
+  const { introFade = 1, proximityFade = 1 } = sprite.material.userData;
+  const opacity = introFade * proximityFade * THREE.MathUtils.lerp(INACTIVE_OPACITY, 1, activation);
+  sprite.material.opacity = opacity;
+  sprite.visible = opacity > 0.012;
+}
+
 /** `activation` blends continuously from the dimmed look (0) to the active look (1). */
 function applyAreaLook(material: THREE.Material, activation: number): void {
-  if (material instanceof THREE.SpriteMaterial) {
-    const activeOpacity = typeof material.userData.activeOpacity === "number" ? material.userData.activeOpacity : 1;
-    material.transparent = true;
-    material.opacity = activeOpacity * THREE.MathUtils.lerp(INACTIVE_OPACITY, 1, activation);
-    material.depthWrite = false;
-  } else if (material instanceof THREE.MeshBasicMaterial && typeof material.userData.activeOpacity === "number") {
+  if (material instanceof THREE.MeshBasicMaterial && typeof material.userData.activeOpacity === "number") {
     material.opacity = material.userData.activeOpacity * THREE.MathUtils.lerp(INACTIVE_OPACITY, 1, activation);
   } else if (material instanceof THREE.MeshLambertMaterial) {
     material.transparent = false;

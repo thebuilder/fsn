@@ -28,7 +28,19 @@ export type FsNode = {
   demoAsset?: string;
   /** Attribution for a licensed demo asset. Shown by the viewer that opens it. */
   demoCredit?: { text: string; href?: string };
+  /** Cheap listing used to size and preview this directory from the outside. */
+  peek?: DirectoryPeek;
 };
+
+/** What a directory looks like from the outside: how much it holds, and of what kinds. */
+export type DirectoryPeek = {
+  total: number;
+  /** Category per child, in listing order, capped at `PEEK_LIMIT`. */
+  categories: FileCategory[];
+};
+
+/** No preview draws more markers than this, so there is nothing to gain by reading further. */
+const PEEK_LIMIT = 64;
 
 export type FilesystemRoot = {
   root: FsNode;
@@ -237,6 +249,44 @@ export async function ensureChildren(node: FsNode): Promise<FsNode[]> {
   if (node.kind !== "directory" || node.handle?.kind !== "directory") return [];
   node.children = await readHandleChildren(node);
   return node.children;
+}
+
+/**
+ * Summarises a directory without opening any file inside it.
+ *
+ * `ensureChildren` calls `getFile()` on every entry to learn its size, which is far too
+ * expensive to run across every sub-directory of the folder you just walked into merely
+ * to draw its preview. Enumerating entries is a readdir; categories come from the names.
+ * Deliberately does not populate `children`, so a later real read still collects sizes.
+ */
+export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
+  if (node.peek) return node.peek;
+  if (node.kind !== "directory") return { total: 0, categories: [] };
+
+  if (node.children) {
+    node.peek = {
+      total: node.children.length,
+      categories: node.children.slice(0, PEEK_LIMIT).map(categoryOf),
+    };
+    return node.peek;
+  }
+
+  const peek: DirectoryPeek = { total: 0, categories: [] };
+  if (node.handle?.kind === "directory") {
+    try {
+      const directory = node.handle as DirectoryHandleWithEntries;
+      for await (const [name, handle] of directory.entries()) {
+        peek.total += 1;
+        if (peek.categories.length < PEEK_LIMIT) {
+          peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: handle.kind }));
+        }
+      }
+    } catch {
+      // A directory we are not allowed to list simply previews as empty land.
+    }
+  }
+  node.peek = peek;
+  return peek;
 }
 
 async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
