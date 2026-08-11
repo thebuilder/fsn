@@ -1,3 +1,4 @@
+import { inject } from "@vercel/analytics";
 import { createDemoFilesystem } from "./demo";
 import {
   categoryOf,
@@ -13,6 +14,16 @@ import {
 } from "./filesystem";
 import { WorldScene, type NavigationDirection } from "./scene";
 import { FileViewer } from "./viewer";
+
+/**
+ * Vercel Web Analytics. Runs once, client-side, before anything else mounts.
+ *
+ * The mode is pinned to Vite's own build flag rather than left on `auto`, which
+ * sniffs `process.env.NODE_ENV` — a variable the browser bundle only happens to
+ * carry. In development this logs events to the console instead of requesting
+ * `/_vercel/insights/*`, which only exists on a Vercel deployment.
+ */
+inject({ mode: import.meta.env.PROD ? "production" : "development" });
 
 function getElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
