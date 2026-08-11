@@ -45,6 +45,7 @@ const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
 const searchCount = getElement<HTMLElement>("search-count");
+const scopeSwitch = getElement<HTMLElement>("scope-switch");
 const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
 const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
@@ -290,34 +291,58 @@ function openSearch(): void {
 
 function applySearchScope(scope: "current" | "all"): void {
   searchScope = scope;
-  scopeCurrentButton.ariaPressed = String(scope === "current");
-  scopeAllButton.ariaPressed = String(scope === "all");
-  searchInput.placeholder = scope === "all" ? "Search everything loaded…" : "Search this directory…";
+  const effective = effectiveSearchScope();
+  // At the root the two scopes cover the same tree, so offering the choice is just noise.
+  scopeSwitch.hidden = ancestry.length === 1;
+  scopeCurrentButton.ariaPressed = String(effective === "current");
+  scopeAllButton.ariaPressed = String(effective === "all");
+  searchInput.placeholder = scopeSwitch.hidden || effective === "all"
+    ? "Search everything loaded…"
+    : "Search this directory and below…";
   renderSearchResults(searchInput.value);
 }
 
+/** The stored preference survives a trip to the root, where it cannot mean anything. */
+function effectiveSearchScope(): "current" | "all" {
+  return ancestry.length === 1 ? "current" : searchScope;
+}
+
 function renderSearchResults(query: string): void {
-  const recursive = searchScope === "all";
-  const base = recursive ? [filesystem.root] : ancestry;
   searchResults.replaceChildren();
   resultButtons = [];
+  const trimmed = query.trim();
+  const scope = effectiveSearchScope();
 
-  // Listing an entire tree on an empty query is noise; the directory view already shows one level.
-  if (recursive && !query.trim()) {
-    searchCount.textContent = "";
-    searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
-    setActiveResult(-1);
+  if (!trimmed) {
+    // An empty box browses the level you are standing on; listing whole trees is noise.
+    if (scope === "all") {
+      searchCount.textContent = "";
+      searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
+      setActiveResult(-1);
+      return;
+    }
+    const children = currentChildren();
+    searchCount.textContent = children.length > searchResultLimit
+      ? `Showing ${searchResultLimit} of ${children.length} objects here`
+      : `${children.length} ${children.length === 1 ? "object" : "objects"} here`;
+    renderMatches(children.slice(0, searchResultLimit).map((node) => ({ node, trail: ancestry })));
     return;
   }
 
-  const outcome = searchFilesystem(base, query, { recursive, limit: searchResultLimit });
+  // Both scopes search nested directories; they differ only in where the walk starts.
+  const base = scope === "all" ? [filesystem.root] : ancestry;
+  const outcome = searchFilesystem(base, trimmed, { limit: searchResultLimit });
   searchCount.textContent = describeOutcome(outcome);
-  if (!outcome.matches.length) {
+  renderMatches(outcome.matches);
+}
+
+function renderMatches(matches: SearchMatch[]): void {
+  if (!matches.length) {
     searchResults.append(emptyResult("NO MATCHING OBJECTS"));
     setActiveResult(-1);
     return;
   }
-  outcome.matches.forEach((match, index) => {
+  matches.forEach((match, index) => {
     const { node, trail } = match;
     const item = document.createElement("li");
     const button = document.createElement("button");

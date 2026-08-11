@@ -267,12 +267,14 @@
   .search-header input { min-width: 0; border: 0; background: transparent; color: #fff; font: 500 1rem var(--mono); outline: 0; }
   .search-header input::placeholder { color: #638078; }
   .key-button { min-height: 1.7rem; padding: 0.35rem 0.45rem; border-color: var(--line); background: #10201f; color: var(--muted); font-size: 0.52rem; }
-  .search-scope { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.75rem; padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line); }
+  .search-scope { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line); }
   .scope-switch { display: flex; gap: 1px; padding: 1px; background: var(--line); }
+  .scope-switch[hidden] { display: none; }
   .scope-button { padding: 0.35rem 0.6rem; border: 0; background: #10201f; color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
   .scope-button:hover { color: #cfe6df; }
   .scope-button[aria-pressed="true"] { background: rgba(134,250,221,.14); color: var(--phosphor); }
-  .search-count { margin: 0; color: var(--muted); font: 0.55rem var(--mono); text-align: end; text-transform: uppercase; }
+  /* Auto start-margin keeps the count against the trailing edge with or without the toggle. */
+  .search-count { margin: 0 0 0 auto; color: var(--muted); font: 0.55rem var(--mono); text-align: end; text-transform: uppercase; }
   .search-results { max-height: min(26rem, 60vh); overflow: auto; margin: 0; padding: 0.4rem; list-style: none; }
   .search-results button { width: 100%; display: grid; grid-template-columns: 2.1rem 1fr auto; align-items: center; gap: 0.75rem; padding: 0.7rem; background: transparent; text-align: start; cursor: pointer; }
   .search-results button:hover, .search-results button:focus-visible { background: rgba(134,250,221,.08); }

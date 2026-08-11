@@ -50,37 +50,46 @@ describe("filesystem utilities", () => {
 });
 
 describe("filesystem search", () => {
-  it("stays inside the current directory when not recursive", () => {
+  it("reaches nested directories and reports each match's trail", () => {
     const root = fixtureTree();
 
-    const outcome = searchFilesystem([root], "main", { recursive: false, limit: 10 });
-
-    expect(outcome.matches).toEqual([]);
-    expect(outcome.total).toBe(0);
-  });
-
-  it("walks the whole loaded tree when recursive and reports each match's trail", () => {
-    const root = fixtureTree();
-
-    const outcome = searchFilesystem([root], "main", { recursive: true, limit: 10 });
+    const outcome = searchFilesystem([root], "main", { limit: 10 });
 
     expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "main-worker.ts"]);
     expect(outcome.matches[1].trail.map((part) => part.name)).toEqual(["root", "src", "deep"]);
     expect(outcome.total).toBe(2);
   });
 
+  it("searches only the subtree under the given directory", () => {
+    const root = fixtureTree();
+    const src = root.children?.[0] as FsNode;
+
+    const outcome = searchFilesystem([root, src], "e", { limit: 10 });
+
+    // "readme.md" sits above src, so it stays out of a search started inside it.
+    expect(outcome.matches.map((match) => match.node.name)).toEqual(["deep", "scene.ts", "main-worker.ts"]);
+  });
+
   it("ranks prefix matches above matches buried inside a name", () => {
     const root = directory("root", [file("zz-main.ts"), file("main.ts")]);
 
-    const outcome = searchFilesystem([root], "main", { recursive: false, limit: 10 });
+    const outcome = searchFilesystem([root], "main", { limit: 10 });
 
     expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "zz-main.ts"]);
+  });
+
+  it("prefers shallow matches when ranking is otherwise tied", () => {
+    const root = directory("root", [directory("nested", [file("report.md")]), file("report.md")]);
+
+    const outcome = searchFilesystem([root], "report", { limit: 10 });
+
+    expect(outcome.matches.map((match) => match.trail.length)).toEqual([1, 2]);
   });
 
   it("caps returned matches while still counting every match", () => {
     const root = directory("root", Array.from({ length: 40 }, (_, index) => file(`log-${index}.txt`)));
 
-    const outcome = searchFilesystem([root], "log", { recursive: false, limit: 25 });
+    const outcome = searchFilesystem([root], "log", { limit: 25 });
 
     expect(outcome.matches).toHaveLength(25);
     expect(outcome.total).toBe(40);
@@ -89,7 +98,7 @@ describe("filesystem search", () => {
   it("counts directories that have not been read instead of reaching for disk", () => {
     const root = fixtureTree();
 
-    const outcome = searchFilesystem([root], "ts", { recursive: true, limit: 10 });
+    const outcome = searchFilesystem([root], "ts", { limit: 10 });
 
     expect(outcome.unreadDirectories).toBe(1);
     expect(outcome.complete).toBe(true);

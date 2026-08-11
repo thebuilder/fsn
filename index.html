@@ -110,11 +110,11 @@
         <div class="search-header">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
           <label class="visually-hidden" for="search-input" id="search-title">Search files</label>
-          <input id="search-input" type="search" placeholder="Search this directory…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
+          <input id="search-input" type="search" placeholder="Search this directory and below…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
           <button class="key-button" type="submit" aria-label="Close search">ESC</button>
         </div>
         <div class="search-scope">
-          <div class="scope-switch" role="group" aria-label="Search scope">
+          <div class="scope-switch" id="scope-switch" role="group" aria-label="Search scope">
             <button class="scope-button" id="scope-current" type="button" aria-pressed="true">This directory</button>
             <button class="scope-button" id="scope-all" type="button" aria-pressed="false">Everywhere</button>
           </div>
