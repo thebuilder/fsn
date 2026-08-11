@@ -595,9 +595,12 @@ export class WorldScene {
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("dblclick", this.onDoubleClick);
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-    window.addEventListener("keydown", this.onKeyDown);
-    window.addEventListener("keyup", this.onKeyUp);
-    window.addEventListener("blur", this.onWindowBlur);
+    // Capture phase: a key release must reach us even if something nearer the target
+    // stops the event, or the camera would keep drifting with nothing to cancel it.
+    window.addEventListener("keydown", this.onKeyDown, true);
+    window.addEventListener("keyup", this.onKeyUp, true);
+    window.addEventListener("blur", this.releaseMovement);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
     new ResizeObserver(this.resize).observe(canvas);
     this.animate();
   }
@@ -1354,7 +1357,18 @@ export class WorldScene {
 
   private onKeyDown = (event: KeyboardEvent): void => {
     this.boosting = event.shiftKey;
-    if (isTypingTarget(event.target) || document.querySelector("dialog[open]")) return;
+    // While a command key is down macOS withholds keyup for everything else, so a
+    // movement key let go during a shortcut would never be removed and the camera
+    // would fly on forever. Treat the modifier going down as releasing the lot.
+    if (event.metaKey || event.ctrlKey) {
+      this.releaseMovement();
+      return;
+    }
+    // Typing or a dialog takes the keyboard away mid-flight; stop rather than coast.
+    if (isTypingTarget(event.target) || document.querySelector("dialog[open]")) {
+      this.releaseMovement();
+      return;
+    }
     if (!MOVE_CODES.has(event.code)) return;
     event.preventDefault();
     this.setKeyboardNavigationActive(true);
@@ -1364,10 +1378,21 @@ export class WorldScene {
 
   private onKeyUp = (event: KeyboardEvent): void => {
     this.boosting = event.shiftKey;
+    // Anything released during a Cmd/Ctrl chord reported no keyup of its own, so the
+    // modifier's release is the first moment the set can be trusted again.
+    if (event.key === "Meta" || event.key === "Control") {
+      this.releaseMovement();
+      return;
+    }
     this.movement.delete(event.code);
   };
 
-  private onWindowBlur = (): void => {
+  private onVisibilityChange = (): void => {
+    if (document.hidden) this.releaseMovement();
+  };
+
+  /** Drops every held key. The one recovery for a keyup that never arrived. */
+  private releaseMovement = (): void => {
     this.movement.clear();
     this.boosting = false;
   };
@@ -1456,9 +1481,10 @@ export class WorldScene {
 
   destroy(): void {
     cancelAnimationFrame(this.frame);
-    window.removeEventListener("keydown", this.onKeyDown);
-    window.removeEventListener("keyup", this.onKeyUp);
-    window.removeEventListener("blur", this.onWindowBlur);
+    window.removeEventListener("keydown", this.onKeyDown, true);
+    window.removeEventListener("keyup", this.onKeyUp, true);
+    window.removeEventListener("blur", this.releaseMovement);
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.disposeWorld();
     this.renderer.dispose();
   }
