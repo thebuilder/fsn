@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#060a0b" />
+    <meta name="description" content="A private, browser-based 3D navigator for your local files." />
+    <title>FSN — 3D File System Navigator</title>
+    <style>html{background:#05090a;color-scheme:dark}</style>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#controls">Skip to navigator controls</a>
+    <main id="app">
+      <canvas id="world" tabindex="0" aria-label="Interactive 3D view of the current directory. Aim with the center reticle, press E to select, or Enter to open the targeted object."></canvas>
+
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="FSN home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span><strong>FSN</strong><small>File System Navigator</small></span>
+        </a>
+        <nav class="breadcrumbs" aria-label="Current directory" id="breadcrumbs"></nav>
+        <div class="top-actions">
+          <button class="icon-button" id="search-button" type="button" aria-label="Search files" title="Search (⌘K)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          </button>
+          <button class="button button-secondary" id="demo-button" type="button">Demo world</button>
+          <button class="button button-primary" id="folder-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5H3z"/></svg>
+            Open folder
+          </button>
+          <input id="folder-fallback" class="visually-hidden" type="file" webkitdirectory multiple aria-label="Choose a local folder" />
+        </div>
+      </header>
+
+      <section class="scene-title" aria-live="polite">
+        <p class="eyebrow" id="source-label">DEMO FILESYSTEM</p>
+        <h1 id="directory-title">Macintosh HD</h1>
+        <p id="directory-summary">0 objects</p>
+      </section>
+
+      <aside class="details-panel" id="details-panel" aria-labelledby="details-title">
+        <div class="panel-accent"></div>
+        <div class="details-heading">
+          <span class="file-glyph" id="details-glyph" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow" id="details-kind">NO SELECTION</p>
+            <h2 id="details-title">Select an object</h2>
+          </div>
+        </div>
+        <dl id="details-list">
+          <div><dt>Path</dt><dd>—</dd></div>
+          <div><dt>Size</dt><dd>—</dd></div>
+          <div><dt>Modified</dt><dd>—</dd></div>
+        </dl>
+        <button class="button button-primary enter-button" id="enter-button" type="button" hidden>Enter directory <span aria-hidden="true">↗</span></button>
+      </aside>
+
+      <section class="legend" aria-label="File type legend">
+        <p class="eyebrow">OBJECT TYPES</p>
+        <ul>
+          <li><i class="swatch swatch-directory"></i>Directory</li>
+          <li><i class="swatch swatch-code"></i>Code</li>
+          <li><i class="swatch swatch-media"></i>Media</li>
+          <li><i class="swatch swatch-document"></i>Document</li>
+          <li><i class="swatch swatch-archive"></i>Archive</li>
+        </ul>
+      </section>
+
+      <section class="controls" id="controls" aria-label="3D navigation controls" tabindex="-1">
+        <p><kbd>Drag</kbd> Orbit</p>
+        <p><kbd>Shift</kbd> + <kbd>Drag</kbd> Pan</p>
+        <p><kbd>Scroll</kbd> Move</p>
+        <p><kbd>W A S D</kbd> Navigate</p>
+        <p><kbd>Double click</kbd> Enter</p>
+        <p><kbd>E</kbd> Select target</p>
+        <p><kbd>Enter</kbd> Open target</p>
+      </section>
+
+      <div class="reticle" id="reticle" aria-hidden="true"><i></i><span>NO TARGET</span></div>
+      <div class="hover-label" id="hover-label" hidden></div>
+      <div class="status" id="status" role="status" aria-live="polite"><i></i><span>Demo filesystem online</span></div>
+    </main>
+
+    <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+      <form method="dialog">
+        <div class="search-header">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <label class="visually-hidden" for="search-input" id="search-title">Search current directory</label>
+          <input id="search-input" type="search" placeholder="Search this directory…" autocomplete="off" />
+          <button class="key-button" type="submit" aria-label="Close search">ESC</button>
+        </div>
+        <ul class="search-results" id="search-results" aria-label="Search results"></ul>
+      </form>
+    </dialog>
+
+    <dialog class="welcome-dialog" id="welcome-dialog" aria-labelledby="welcome-title">
+      <div class="welcome-visual" aria-hidden="true">
+        <div class="mini-grid"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <div class="welcome-copy">
+        <p class="eyebrow">SYSTEM READY</p>
+        <h2 id="welcome-title"><span>Your files,</span> <span>as a world.</span></h2>
+        <p>Explore a generated filesystem now, or open a folder from your computer. Everything stays in this browser.</p>
+        <div class="welcome-actions">
+          <button class="button button-primary" id="welcome-demo" type="button">Explore demo</button>
+          <button class="button button-secondary" id="welcome-folder" type="button">Open local folder</button>
+        </div>
+        <small>Read-only. No files are uploaded.</small>
+      </div>
+    </dialog>
+
+    <dialog class="file-viewer" id="file-viewer" aria-labelledby="viewer-title">
+      <div class="viewer-window">
+        <header class="viewer-titlebar">
+          <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="viewer-title-wrap">
+            <span id="viewer-mode">OBJECT VIEWER</span>
+            <h2 id="viewer-title">Untitled</h2>
+          </div>
+          <button class="viewer-close" id="viewer-close" type="button" aria-label="Close file viewer">×</button>
+        </header>
+        <div class="viewer-toolbar">
+          <span id="viewer-path">/</span>
+          <div>
+            <button class="tool-toggle" id="pixel-toggle" type="button" aria-pressed="true" hidden>PIXEL FILTER: ON</button>
+            <span id="viewer-size">0 KB</span>
+          </div>
+        </div>
+        <div class="viewer-content" id="viewer-content"></div>
+        <footer class="viewer-footer">
+          <span><i class="viewer-led"></i> LOCAL READ-ONLY CHANNEL</span>
+          <span id="viewer-position">READY</span>
+        </footer>
+      </div>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
