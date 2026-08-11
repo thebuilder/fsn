@@ -8,6 +8,8 @@ export type FileCategory =
   | "video"
   | "document"
   | "archive"
+  | "model"
+  | "font"
   | "system"
   | "unknown";
 
@@ -22,7 +24,10 @@ export type FsNode = {
   file?: File;
   handle?: FileSystemHandle;
   demoContent?: string;
-  demoImage?: string;
+  /** Public URL for a demo file that has real bytes on disk (images, models, audio). */
+  demoAsset?: string;
+  /** Attribution for a licensed demo asset. Shown by the viewer that opens it. */
+  demoCredit?: { text: string; href?: string };
 };
 
 export type FilesystemRoot = {
@@ -32,19 +37,42 @@ export type FilesystemRoot = {
 };
 
 const codeExtensions = new Set([
-  "c", "cpp", "css", "go", "h", "html", "java", "js", "json", "jsx", "mdx", "py", "rb", "rs", "scss", "sh", "sql", "swift", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml",
+  "astro", "bash", "bat", "c", "cfg", "cjs", "clj", "cljs", "cmd", "conf", "cpp", "cs", "css", "cts", "dart", "diff", "elm", "erl", "ex", "exs", "fish", "fs", "go", "gql", "gradle", "graphql", "groovy", "h", "hcl", "hpp", "hs", "html", "ini", "java", "jl", "js", "json", "json5", "jsonc", "jsx", "kt", "kts", "less", "lua", "mjs", "mts", "mdx", "nim", "patch", "php", "pl", "properties", "proto", "ps1", "py", "r", "rb", "rs", "sass", "scala", "scss", "sh", "sql", "styl", "svelte", "swift", "tf", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml", "zig", "zsh",
 ]);
-const imageExtensions = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"]);
-const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "ogg", "wav"]);
-const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "webm"]);
-const documentExtensions = new Set(["csv", "doc", "docx", "log", "md", "pdf", "rtf", "txt"]);
-const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "rar", "tar", "tgz", "zip"]);
+const imageExtensions = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"]);
+const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
+const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "ogv", "webm"]);
+const documentExtensions = new Set(["csv", "doc", "docx", "log", "md", "nfo", "pdf", "rtf", "text", "tsv", "txt"]);
+const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "jar", "rar", "tar", "tgz", "zip"]);
+const modelExtensions = new Set(["glb", "gltf", "obj", "ply", "stl"]);
+const fontExtensions = new Set(["otf", "ttf", "woff", "woff2"]);
 const systemExtensions = new Set(["app", "bin", "dat", "dll", "dylib", "exe", "pkg", "so"]);
-const textExtensions = new Set([...codeExtensions, "csv", "log", "md", "rtf", "txt"]);
+const textExtensions = new Set([...codeExtensions, "csv", "log", "md", "nfo", "rtf", "text", "tsv", "txt"]);
+
+/**
+ * Files whose type lives in the name rather than an extension. Without these, an
+ * everyday repository is mostly ACCESS DENIED screens: Makefile, LICENSE and every
+ * dotfile fall through `extensionOf` with nothing to classify.
+ */
+const namedFiles = new Map<string, FileCategory>([
+  ...["makefile", "dockerfile", "containerfile", "justfile", "rakefile", "gemfile", "podfile", "procfile", "brewfile", "vagrantfile", "jenkinsfile"].map((name) => [name, "code"] as const),
+  ...[".babelrc", ".browserslistrc", ".dockerignore", ".editorconfig", ".env", ".eslintrc", ".gitattributes", ".gitignore", ".gitmodules", ".htaccess", ".npmrc", ".nvmrc", ".prettierrc", ".yarnrc"].map((name) => [name, "code"] as const),
+  ...["authors", "changelog", "changes", "codeowners", "contributing", "contributors", "copying", "install", "license", "licence", "news", "notice", "readme", "todo", "version"].map((name) => [name, "document"] as const),
+]);
 
 export function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/** Classifies files that carry no usable extension, including scoped dotfiles like `.env.local`. */
+function namedCategory(name: string): FileCategory | undefined {
+  const lower = name.toLowerCase();
+  const direct = namedFiles.get(lower);
+  if (direct) return direct;
+  if (!lower.startsWith(".")) return undefined;
+  const scope = lower.indexOf(".", 1);
+  return scope > 0 ? namedFiles.get(lower.slice(0, scope)) : undefined;
 }
 
 export function categoryOf(node: FsNode): FileCategory {
@@ -56,12 +84,24 @@ export function categoryOf(node: FsNode): FileCategory {
   if (videoExtensions.has(extension)) return "video";
   if (documentExtensions.has(extension)) return "document";
   if (archiveExtensions.has(extension)) return "archive";
+  if (modelExtensions.has(extension)) return "model";
+  if (fontExtensions.has(extension)) return "font";
   if (systemExtensions.has(extension)) return "system";
-  return "unknown";
+  return namedCategory(node.name) ?? "unknown";
+}
+
+/**
+ * Whether anything can actually be read from the node. Demo entries that exist only
+ * as metadata answer false, so no viewer is asked to decode an object with no bytes.
+ */
+export function hasBytes(node: FsNode): boolean {
+  return node.kind === "file" && (Boolean(node.file) || Boolean(node.demoAsset) || node.demoContent !== undefined);
 }
 
 export function canReadAsText(node: FsNode): boolean {
-  return node.kind === "file" && textExtensions.has(extensionOf(node.name));
+  if (node.kind !== "file") return false;
+  const extension = extensionOf(node.name);
+  return extension ? textExtensions.has(extension) : namedCategory(node.name) !== undefined;
 }
 
 export function formatBytes(bytes?: number): string {

@@ -68,6 +68,8 @@ const palette: Record<FileCategory, number> = {
   video: 0xff8656,
   document: 0x8bbfff,
   archive: 0xe6de6d,
+  model: 0x5ce88a,
+  font: 0x4fc6e8,
   system: 0xff5a65,
   unknown: 0x899496,
 };
