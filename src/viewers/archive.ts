@@ -5,7 +5,7 @@ import type { ViewerHost } from "./types";
 
 /**
  * How much of the tail to read. The index lives at the end of a ZIP, so this is all
- * we ever need to touch — 8 MB covers an archive with roughly a hundred thousand
+ * we ever need to touch; 8 MB covers an archive with roughly a hundred thousand
  * entries without pulling a multi-gigabyte file into memory.
  */
 const WINDOW = 8 * 1024 * 1024;
@@ -53,10 +53,10 @@ function manifestTable(entries: ZipEntry[]): HTMLElement {
     if (entry.encrypted) name.append(el("i", "manifest-lock", "ENCRYPTED"));
     row.append(
       name,
-      el("td", "is-numeric", entry.isDirectory ? "—" : formatBytes(entry.uncompressedSize)),
-      el("td", "is-numeric", entry.isDirectory ? "—" : formatBytes(entry.compressedSize)),
+      el("td", "is-numeric", entry.isDirectory ? "-" : formatBytes(entry.uncompressedSize)),
+      el("td", "is-numeric", entry.isDirectory ? "-" : formatBytes(entry.compressedSize)),
       el("td", "is-numeric", savings(entry)),
-      el("td", undefined, entry.isDirectory ? "—" : entry.method),
+      el("td", undefined, entry.isDirectory ? "-" : entry.method),
       el("td", undefined, formatDate(entry.modified)),
     );
     body.append(row);
@@ -67,6 +67,6 @@ function manifestTable(entries: ZipEntry[]): HTMLElement {
 }
 
 function savings(entry: ZipEntry): string {
-  if (entry.isDirectory || !entry.uncompressedSize) return "—";
+  if (entry.isDirectory || !entry.uncompressedSize) return "-";
   return `${Math.round((1 - entry.compressedSize / entry.uncompressedSize) * 100)}%`;
 }

@@ -27,7 +27,7 @@ export function hexLines(bytes: Uint8Array, start = 0): HexLine[] {
 /**
  * True when the bytes hold more than one frame. Canvas rasterisation freezes an
  * animation on its first frame, so the image viewer needs to know before it decides
- * how to present the file — and a *static* GIF should still get the real filter.
+ * how to present the file, and a *static* GIF should still get the real filter.
  */
 export function isAnimatedImage(extension: string, bytes: Uint8Array): boolean {
   if (extension === "gif") return gifIsAnimated(bytes);

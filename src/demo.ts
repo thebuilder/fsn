@@ -49,7 +49,7 @@ export function createDemoFilesystem(): FilesystemRoot {
     ]),
     directory("Documents", [
       directory("Field Notes", [
-        file("august-11.txt", 4_210, 0, "08.11.2026 — FIELD LOG\n\nThe navigator is stable. Directory blocks now hold their position when revisited. The phosphor grid persists past the fog line.\n\nNext: establish a visual language for unknown objects. Do not trust unlabeled binaries."),
+        file("august-11.txt", 4_210, 0, "08.11.2026 FIELD LOG\n\nThe navigator is stable. Directory blocks now hold their position when revisited. The phosphor grid persists past the fog line.\n\nNext: establish a visual language for unknown objects. Do not trust unlabeled binaries."),
         file("coordinates.log", 1_840, 2, "NORTH PLATFORM: 58.334 / -2.104\nEAST PLATFORM: 58.339 / -2.091\nSIGNAL: NOMINAL\nARCHIVE LINK: DEGRADED"),
         photo("velociraptor.webp", 242_676, 0),
       ]),
@@ -81,9 +81,9 @@ export function createDemoFilesystem(): FilesystemRoot {
     ]),
     directory("Music", [
       file("ambient-loop.aiff", 32_000_000, 90),
-      track("Karl Casey — Vice.mp3", "karl-casey-vice.mp3", 8_182_387, 21, WHITE_BAT),
+      track("Karl Casey - Vice.mp3", "karl-casey-vice.mp3", 8_182_387, 21, WHITE_BAT),
       file("voice-memo.wav", 3_200_000, 3),
-      file("credits.txt", 420, 21, `MUSIC CREDITS\n\n"Vice" — from White Bat XVII\n${WHITE_BAT.text}\n${WHITE_BAT.href}\n\nUsed with credit, as the artist requires.`),
+      file("credits.txt", 420, 21, `MUSIC CREDITS\n\n"Vice" from White Bat XVII\n${WHITE_BAT.text}\n${WHITE_BAT.href}\n\nUsed with credit, as the artist requires.`),
     ]),
     directory("Downloads", [file("archive-001.zip", 84_000_000, 14), file("manual.pdf", 4_200_000, 3), file("unknown.pkg", 142_000_000, 0), photo("incoming-signal.webp", 198_036, 1), photo("archive-vault.webp", 198_490, 14)]),
     directory("System", [directory("Extensions", [file("AppleScript", 98_000, 1_800), file("QuickTime™", 1_800_000, 1_600), file("Sound Manager", 440_000, 1_900)]), file("System", 12_000_000, 2_000), file("Finder", 1_400_000, 1_980), photo("last-login.webp", 223_890, 0)]),

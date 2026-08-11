@@ -4,7 +4,7 @@ import type { ViewerHost } from "./types";
 
 /** Nodes rendered before the tree stops expanding; a source map would otherwise hang the pane. */
 const MAX_NODES = 20_000;
-/** Levels open on arrival — deep enough to show shape, shallow enough to stay readable. */
+/** Levels open on arrival: deep enough to show shape, shallow enough to stay readable. */
 const OPEN_DEPTH = 2;
 /** Recursion guard: hand-written JSON never nests this far, generated JSON sometimes does. */
 const MAX_DEPTH = 64;

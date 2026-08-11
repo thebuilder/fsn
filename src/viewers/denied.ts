@@ -34,7 +34,7 @@ export function render(host: ViewerHost): void {
   host.mount(panel);
   host.setStatus("OPERATION TERMINATED");
 
-  // The denial is the default, not the ceiling: an operator can still read the bytes —
+  // The denial is the default, not the ceiling: an operator can still read the bytes,
   // but only where there are bytes to read.
   if (readable) {
     const override = el("button", "tool-toggle", "FORCE HEX DUMP");

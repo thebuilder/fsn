@@ -30,7 +30,7 @@ const decoder = new TextDecoder("utf-8");
 
 /**
  * Reads a ZIP central directory without inflating anything. Listing an archive only
- * needs the trailing index, so this stays cheap even on a multi-gigabyte file — and
+ * needs the trailing index, so this stays cheap even on a multi-gigabyte file, and
  * it keeps the viewer dependency-free.
  *
  * `bytes` may be a window onto the end of the file; `baseOffset` says where that

@@ -105,7 +105,7 @@ export function canReadAsText(node: FsNode): boolean {
 }
 
 export function formatBytes(bytes?: number): string {
-  if (bytes === undefined) return "—";
+  if (bytes === undefined) return "-";
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -114,7 +114,7 @@ export function formatBytes(bytes?: number): string {
 }
 
 export function formatDate(timestamp?: number): string {
-  if (!timestamp) return "—";
+  if (!timestamp) return "-";
   return new Intl.DateTimeFormat(undefined, {
     year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   }).format(timestamp);
@@ -151,7 +151,7 @@ const searchCandidateLimit = 200;
 /**
  * Walks the whole subtree under `base` (an ancestry chain ending at the directory to
  * search), breadth-first so shallow matches are found first. It only descends into
- * directories already read into memory — searching never triggers new disk access.
+ * directories already read into memory; searching never triggers new disk access.
  */
 export function searchFilesystem(
   base: FsNode[],
