@@ -68,7 +68,7 @@ const viewer = new FileViewer({
   size: getElement("viewer-size"),
   content: getElement("viewer-content"),
   position: getElement("viewer-position"),
-  pixelToggle: getElement<HTMLButtonElement>("pixel-toggle"),
+  tools: getElement("viewer-tools"),
   close: getElement<HTMLButtonElement>("viewer-close"),
 });
 

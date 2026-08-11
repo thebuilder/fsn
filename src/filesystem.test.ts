@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { categoryOf, formatBytes, rootFromFileList, searchFilesystem, type FsNode } from "./filesystem";
+import { canReadAsText, categoryOf, formatBytes, rootFromFileList, searchFilesystem, type FsNode } from "./filesystem";
 
 function directory(name: string, children: FsNode[]): FsNode {
   return { id: name, parentId: null, name, kind: "directory", children };
@@ -19,9 +19,28 @@ function fixtureTree(): FsNode {
 
 describe("filesystem utilities", () => {
   it("classifies representative file types", () => {
-    expect(categoryOf({ id: "1", parentId: null, kind: "file", name: "scene.ts" })).toBe("code");
-    expect(categoryOf({ id: "2", parentId: null, kind: "file", name: "photo.png" })).toBe("image");
-    expect(categoryOf({ id: "3", parentId: null, kind: "directory", name: "src" })).toBe("directory");
+    expect(categoryOf(file("scene.ts"))).toBe("code");
+    expect(categoryOf(file("photo.png"))).toBe("image");
+    expect(categoryOf(directory("src", []))).toBe("directory");
+    expect(categoryOf(file("turbine.stl"))).toBe("model");
+    expect(categoryOf(file("Inter.woff2"))).toBe("font");
+    expect(categoryOf(file("release.zip"))).toBe("archive");
+  });
+
+  it("classifies files that carry their type in the name", () => {
+    expect(categoryOf(file("Makefile"))).toBe("code");
+    expect(categoryOf(file(".gitignore"))).toBe("code");
+    expect(categoryOf(file("LICENSE"))).toBe("document");
+    expect(categoryOf(file(".env.local"))).toBe("code");
+    expect(categoryOf(file("Finder"))).toBe("unknown");
+  });
+
+  it("only reads formats it can actually decode as text", () => {
+    expect(canReadAsText(file("notes.md"))).toBe(true);
+    expect(canReadAsText(file("Dockerfile"))).toBe(true);
+    expect(canReadAsText(file("archive.zip"))).toBe(false);
+    expect(canReadAsText(file("mystery.dat"))).toBe(false);
+    expect(canReadAsText(directory("src", []))).toBe(false);
   });
 
   it("formats byte sizes for the interface", () => {
