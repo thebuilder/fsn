@@ -5,7 +5,7 @@ import { defineConfig } from "vite";
  * need an absolute origin baked in at build time.
  *
  * `VERCEL_PROJECT_PRODUCTION_URL` is the project's production domain (no scheme),
- * and it stays pointed at production even on preview deployments — which is what we
+ * and it stays pointed at production even on preview deployments, which is what we
  * want, so a shared preview link still previews the real card rather than a
  * throwaway deployment URL. `SITE_URL` overrides it for other hosts.
  */
@@ -20,6 +20,9 @@ function resolveSiteUrl(): string {
 export default defineConfig(() => {
   const siteUrl = resolveSiteUrl();
   return {
+    // Honour PORT so a supervisor that hands us a free port gets a server there,
+    // rather than Vite quietly picking the next one up from 5173.
+    server: { port: Number(process.env.PORT) || 5173 },
     plugins: [
       {
         name: "fsn-site-url",

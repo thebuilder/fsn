@@ -56,12 +56,11 @@ export async function render(host: ViewerHost): Promise<void> {
     host.setStatus(animated ? "SEQUENCE PLAYING / FILTER UNAVAILABLE" : "IMAGE DECODED / FILTER UNAVAILABLE");
     return;
   }
-  stage.classList.add("is-filtered");
-  sequence?.play(paint, host);
-
+  // The filter starts off: an image opens as itself, and the reader asks for blocks.
+  // The canvas keeps the one paint above so switching it on has nothing to wait for.
   host.addToggle({
     label: (on) => `PIXEL FILTER: ${on ? "ON" : "OFF"}`,
-    initial: true,
+    initial: false,
     onChange: (on) => {
       stage.classList.toggle("is-filtered", on);
       // Unfiltered playback is the <img>'s own job; the decoder rests until asked again.
@@ -157,7 +156,7 @@ async function openSequence(host: ViewerHost): Promise<{ sequence: Sequence | nu
 /**
  * Waits on the load event rather than `decode()`: Chromium never settles the decode
  * promise for an animated image that is not yet in the document, which is exactly the
- * case here — and would hang the viewer on every GIF.
+ * case here, and would hang the viewer on every GIF.
  */
 function settled(image: HTMLImageElement): Promise<void> {
   if (image.complete) return Promise.resolve();

@@ -69,7 +69,7 @@ function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerH
   scene.fog = new THREE.Fog(VOID, 12, 26);
 
   // One material for everything: source files carry textures we cannot resolve, and
-  // the phosphor read is the point of the room. The wireframe is deliberately *un*lit —
+  // the phosphor read is the point of the room. The wireframe is deliberately *un*lit:
   // lighting a one-pixel edge leaves it almost black against the void.
   const surface = new THREE.MeshStandardMaterial({ color: PHOSPHOR, roughness: 0.45, metalness: 0.15, flatShading: true });
   const wire = new THREE.MeshBasicMaterial({ color: 0xc8fff0, wireframe: true, transparent: true, opacity: 0.55 });

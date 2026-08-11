@@ -1,4 +1,4 @@
-# FSN — 3D File System Navigator
+# FSN: 3D File System Navigator
 
 A browser-based tribute to SGI's File System Navigator. It renders one directory at a time as a deterministic WebGL city and keeps local file access read-only.
 
@@ -58,6 +58,6 @@ node tools/make-demo-model.mjs
 
 The demo filesystem plays **"Vice"** from *White Bat XVII*.
 
-> Music by Karl Casey @ White Bat Audio — <https://karlcasey.bandcamp.com/album/white-bat-xvii>
+> Music by Karl Casey @ White Bat Audio: <https://karlcasey.bandcamp.com/album/white-bat-xvii>
 
 The credit travels with the file: it is shown in the sound player whenever the track is opened, and repeated in `Music/credits.txt` inside the demo filesystem.

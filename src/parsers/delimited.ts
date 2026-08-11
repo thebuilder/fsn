@@ -9,7 +9,7 @@ export type Sheet = {
 
 /**
  * Picks a separator by sampling the first line. Extension wins when it is explicit
- * (`.tsv`), otherwise the character with the highest count outside quotes takes it —
+ * (`.tsv`), otherwise the character with the highest count outside quotes takes it,
  * exported spreadsheets use semicolons in most of Europe.
  */
 export function delimiterFor(name: string, sample: string): string {

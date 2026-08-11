@@ -9,7 +9,7 @@ export type ToggleSpec = {
 
 /**
  * Everything a renderer is allowed to touch. Renderers never see the dialog, the
- * toolbar or each other — the host owns the chrome and the lifetime, which is what
+ * toolbar or each other; the host owns the chrome and the lifetime, which is what
  * lets every renderer be an independently loaded chunk.
  */
 export type ViewerHost = {

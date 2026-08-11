@@ -22,7 +22,7 @@ import { FileViewer } from "./viewer";
  * Vercel Web Analytics. Runs once, client-side, before anything else mounts.
  *
  * The mode is pinned to Vite's own build flag rather than left on `auto`, which
- * sniffs `process.env.NODE_ENV` — a variable the browser bundle only happens to
+ * sniffs `process.env.NODE_ENV`, a variable the browser bundle only happens to
  * carry. In development this logs events to the console instead of requesting
  * `/_vercel/insights/*`, which only exists on a Vercel deployment.
  */
@@ -63,6 +63,7 @@ const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 
 const viewer = new FileViewer({
   dialog: getElement<HTMLDialogElement>("file-viewer"),
+  titlebar: getElement("viewer-titlebar"),
   title: getElement("viewer-title"),
   mode: getElement("viewer-mode"),
   path: getElement("viewer-path"),
@@ -70,6 +71,9 @@ const viewer = new FileViewer({
   content: getElement("viewer-content"),
   position: getElement("viewer-position"),
   tools: getElement("viewer-tools"),
+  zoom: getElement<HTMLButtonElement>("viewer-zoom"),
+  collapse: getElement<HTMLButtonElement>("viewer-collapse"),
+  grow: getElement<HTMLButtonElement>("viewer-grow"),
   close: getElement<HTMLButtonElement>("viewer-close"),
 });
 
@@ -180,7 +184,7 @@ function updateSelection(node: FsNode | null): void {
     detailsKind.textContent = "NO SELECTION";
     detailsTitle.textContent = "Select an object";
     detailsGlyph.className = "file-glyph";
-    detailsList.innerHTML = `<div><dt>Path</dt><dd>—</dd></div><div><dt>Size</dt><dd>—</dd></div><div><dt>Modified</dt><dd>—</dd></div>`;
+    detailsList.innerHTML = `<div><dt>Path</dt><dd>-</dd></div><div><dt>Size</dt><dd>-</dd></div><div><dt>Modified</dt><dd>-</dd></div>`;
     enterButton.hidden = true;
     return;
   }
@@ -401,7 +405,7 @@ function moveActiveResult(step: number): void {
 function describeOutcome(outcome: SearchOutcome): string {
   const counted = `${outcome.complete ? "" : "over "}${outcome.total}`;
   const headline = outcome.total > outcome.matches.length
-    ? `Showing ${outcome.matches.length} of ${counted} — refine to narrow`
+    ? `Showing ${outcome.matches.length} of ${counted}, refine to narrow`
     : `${counted} ${outcome.total === 1 ? "match" : "matches"}`;
   // Local directories load lazily, so say plainly which part of the tree was not looked at.
   return outcome.unreadDirectories > 0
@@ -492,7 +496,7 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     goBack();
   }
-  // A dialog owns Escape while it is open — the browser closes it for us.
+  // A dialog owns Escape while it is open; the browser closes it for us.
   if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
     event.preventDefault();
     goBack();
