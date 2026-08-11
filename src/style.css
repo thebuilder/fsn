@@ -26,7 +26,10 @@
     --blue: #8dbdf5;
     --sans: "Helvetica Neue", Inter, Arial, sans-serif;
     --mono: "SFMono-Regular", "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+    /* The house entrance curve: leaves immediately, settles late. */
+    --ease-out: cubic-bezier(.2, .7, .3, 1);
   }
+
 
   body {
     overflow: hidden;
@@ -60,7 +63,21 @@
 }
 
 @layer components {
-  #app { position: fixed; inset: 0; isolation: isolate; }
+  /**
+   * Nothing is drawn until the app knows which world it is drawing.
+   *
+   * The demo is mounted at startup as the fallback, and reading the last visit out of
+   * IndexedDB takes a few frames — long enough for a demo title and a demo skyline to
+   * flash past before the folder you actually left open replaces them. A beat of black
+   * is cheaper than a glimpse of the wrong filesystem.
+   *
+   * The failsafe matters more than the fade: should the boot never resolve, the
+   * interface still arrives rather than stranding someone on an empty page. Its
+   * duration has to be real — a zero-length animation counts as already finished, and
+   * fills its end state over the hidden one immediately.
+   */
+  #app { position: fixed; inset: 0; isolation: isolate; opacity: 1; transition: opacity 300ms var(--ease-out); }
+  :root[data-boot="pending"] #app { opacity: 0; animation: boot-failsafe 300ms 4s var(--ease-out) forwards; }
   #world { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; transition: filter 400ms ease, opacity 400ms ease; }
   .scene-switching #world { filter: brightness(1.55) saturate(0.7); opacity: 0.7; }
 
@@ -252,7 +269,23 @@
   dialog { color: inherit; }
   dialog::backdrop { background: rgba(1, 5, 6, 0.72); backdrop-filter: blur(5px) saturate(.65); }
   .welcome-dialog { width: min(44rem, calc(100vw - 2rem)); padding: 0; border: 1px solid var(--line-strong); background: #091212; box-shadow: 0 2rem 7rem #000, 0 0 60px rgba(105,249,216,.08); }
-  .welcome-dialog[open] { display: grid; grid-template-columns: 0.9fr 1.1fr; }
+  /**
+   * The front door, so it settles rather than snaps: scale stays near 1 because a modal
+   * this large magnifies any travel, and `allow-discrete` keeps the element in the top
+   * layer long enough for the closing half to be seen. Leaving is quicker than arriving —
+   * dismissing it is a decision already made.
+   */
+  .welcome-dialog, .welcome-dialog::backdrop {
+    transition: opacity 170ms var(--ease-out), transform 170ms var(--ease-out), overlay 170ms allow-discrete, display 170ms allow-discrete;
+  }
+  .welcome-dialog { opacity: 0; transform: scale(.985) translateY(.5rem); }
+  .welcome-dialog::backdrop { opacity: 0; }
+  .welcome-dialog[open], .welcome-dialog[open]::backdrop { opacity: 1; transition-duration: 260ms; }
+  .welcome-dialog[open] { display: grid; grid-template-columns: 0.9fr 1.1fr; transform: none; }
+  @starting-style {
+    .welcome-dialog[open] { opacity: 0; transform: scale(.985) translateY(.5rem); }
+    .welcome-dialog[open]::backdrop { opacity: 0; }
+  }
   .welcome-visual { position: relative; display: grid; min-height: 22rem; overflow: hidden; padding: 1.25rem; border-right: 1px solid var(--line); background: radial-gradient(circle at 50% 60%, rgba(100,255,216,.12), transparent 55%), #050b0b; }
   /* preserveAspectRatio centres the artwork, so the SVG can safely fill its box. */
   .welcome-art { width: 100%; height: 100%; min-height: 0; filter: drop-shadow(0 1.25rem 1.5rem rgba(0,0,0,.55)); }
@@ -478,6 +511,7 @@
   .hex-ascii { color: var(--amber); white-space: pre; }
   .access-denied .tool-toggle { margin-top: 2rem; }
 
+  @keyframes boot-failsafe { to { opacity: 1; } }
   @keyframes title-in { from { opacity: 0; transform: translateY(0.6rem); } }
   @keyframes crumb-in { from { opacity: 0; transform: translateX(-0.45rem); } }
   @keyframes led-pulse { 50% { opacity: .35; } }

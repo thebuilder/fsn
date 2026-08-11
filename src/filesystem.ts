@@ -232,7 +232,15 @@ export async function openBrowserDirectory(): Promise<FilesystemRoot | null> {
     showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>;
   };
   if (!pickerWindow.showDirectoryPicker) return null;
-  const handle = await pickerWindow.showDirectoryPicker({ mode: "read" });
+  return rootFromDirectoryHandle(await pickerWindow.showDirectoryPicker({ mode: "read" }));
+}
+
+/**
+ * Builds a filesystem around an already-authorized handle, whether it came from the
+ * picker just now or out of storage from an earlier visit. Reading it here is what
+ * proves the directory is still both present and permitted.
+ */
+export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<FilesystemRoot> {
   const root: FsNode = {
     id: `local:${encodeURIComponent(handle.name)}`,
     parentId: null,

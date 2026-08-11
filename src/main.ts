@@ -8,6 +8,7 @@ import {
   formatDate,
   openBrowserDirectory,
   pathFor,
+  rootFromDirectoryHandle,
   rootFromFileList,
   searchFilesystem,
   sortNodes,
@@ -16,6 +17,7 @@ import {
   type SearchMatch,
   type SearchOutcome,
 } from "./filesystem";
+import { directoryPermission, forgetSource, recallSource, rememberSource } from "./recent";
 import { WorldScene, type NavigationDirection } from "./scene";
 import { FileViewer } from "./viewer";
 
@@ -61,6 +63,8 @@ const scopeSwitch = getElement<HTMLElement>("scope-switch");
 const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
 const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
+const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
+const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
 
 const viewer = new FileViewer({
   dialog: getElement<HTMLDialogElement>("file-viewer"),
@@ -274,11 +278,17 @@ function goToRoot(): void {
   void renderDirectory(true, "backward");
 }
 
-function setFilesystem(next: FilesystemRoot): void {
+/**
+ * `announcement` replaces the standard mount line for arrivals that need explaining.
+ * Resolves once the world is drawn, which is what the boot sequence waits on.
+ */
+function setFilesystem(next: FilesystemRoot, announcement?: string): Promise<void> {
   filesystem = next;
   ancestry = [next.root];
   ancestryById.clear();
-  void renderDirectory(true, "initial");
+  const drawn = renderDirectory(!announcement, "initial");
+  if (announcement) setStatus(announcement);
+  return drawn;
 }
 
 function setStatus(message: string, isError = false): void {
@@ -293,6 +303,10 @@ async function chooseFolder(): Promise<void> {
     const selected = await openBrowserDirectory();
     if (selected) {
       setFilesystem(selected);
+      if (selected.root.handle?.kind === "directory") {
+        void rememberSource({ mode: "local", handle: selected.root.handle as FileSystemDirectoryHandle });
+      }
+      withdrawReopenOffer();
       welcomeDialog.close();
     } else {
       folderFallback.click();
@@ -305,6 +319,78 @@ async function chooseFolder(): Promise<void> {
     }
     setStatus(error instanceof Error ? error.message : "Folder access was denied", true);
   }
+}
+
+/**
+ * Puts the remembered directory back on screen. The handle is a live reference rather
+ * than a copy, so this reads the folder as it stands now, not as it stood last visit.
+ */
+async function mountRememberedDirectory(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  try {
+    const restored = await rootFromDirectoryHandle(handle);
+    const count = restored.root.children?.length ?? 0;
+    // Says why this folder is on screen when nothing was clicked to put it there.
+    await setFilesystem(restored, `Reopened ${handle.name} · ${count} ${count === 1 ? "object" : "objects"}`);
+    return true;
+  } catch {
+    // Folders get moved, renamed and deleted between visits; a handle to one that no
+    // longer resolves is dead weight, so stop offering it. The browser's own wording
+    // for this ("a requested file or directory could not be found…") never says which.
+    void forgetSource();
+    withdrawReopenOffer();
+    setStatus(`Could not reopen ${handle.name} — it may have been moved or renamed`, true);
+    return false;
+  }
+}
+
+/**
+ * The folder a returning visitor is owed, waiting on the one click that re-grants it.
+ * Non-null only while the toolbar button is offering that folder rather than the picker.
+ */
+let pendingReopen: FileSystemDirectoryHandle | null = null;
+
+/**
+ * `requestPermission` needs the click that got us here, so nothing may be awaited
+ * before it. On a lapsed grant it shows the browser's own short confirmation naming
+ * the folder — which is the whole point of keeping the handle rather than sending
+ * someone back through the picker to find the same directory a second time.
+ */
+async function reopenRememberedDirectory(handle: FileSystemDirectoryHandle): Promise<void> {
+  folderButton.disabled = true;
+  setStatus(`Awaiting access to ${handle.name}…`);
+  try {
+    if (await directoryPermission(handle, { request: true }) !== "granted") {
+      // Saying no is an answer, not an error to be re-asked on the next visit.
+      void forgetSource();
+      withdrawReopenOffer();
+      setStatus(`Access to ${handle.name} was denied`, true);
+      return;
+    }
+    if (await mountRememberedDirectory(handle)) withdrawReopenOffer();
+  } finally {
+    folderButton.disabled = false;
+  }
+}
+
+/**
+ * Offers the remembered folder from the toolbar instead of behind a modal.
+ *
+ * Chrome hands back a stored handle with its permission lapsed to "prompt" on nearly
+ * every reload, so this is the ordinary path home, not an error worth blocking the
+ * page for: the demo stays up, and the button that would have opened the picker
+ * reopens the folder by name.
+ */
+function offerRememberedDirectory(handle: FileSystemDirectoryHandle): void {
+  pendingReopen = handle;
+  folderButtonLabel.textContent = `Reopen ${trimName(handle.name, 18)}`;
+  folderButton.title = `Reopen ${handle.name} — your browser needs one click to restore access`;
+  setStatus(`${trimName(handle.name, 18)} is one click away`);
+}
+
+function withdrawReopenOffer(): void {
+  pendingReopen = null;
+  folderButtonLabel.textContent = "Open folder";
+  folderButton.removeAttribute("title");
 }
 
 /** Results are capped so a broad query returns a readable list instead of the whole tree. */
@@ -453,8 +539,11 @@ function trimName(name: string, length: number): string {
   return name.length > length ? `${name.slice(0, length - 1)}…` : name;
 }
 
-folderButton.addEventListener("click", () => void chooseFolder());
-demoButton.addEventListener("click", () => setFilesystem(createDemoFilesystem()));
+folderButton.addEventListener("click", () => void (pendingReopen ? reopenRememberedDirectory(pendingReopen) : chooseFolder()));
+demoButton.addEventListener("click", () => {
+  setFilesystem(createDemoFilesystem());
+  void rememberSource({ mode: "demo" });
+});
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode));
 searchButton.addEventListener("click", openSearch);
 searchInput.addEventListener("input", () => renderSearchResults(searchInput.value));
@@ -493,7 +582,16 @@ getElement<HTMLAnchorElement>("brand-home").addEventListener("click", (event) =>
   event.preventDefault();
   goToRoot();
 });
-getElement<HTMLButtonElement>("welcome-demo").addEventListener("click", () => welcomeDialog.close());
+welcomeDemo.addEventListener("click", () => welcomeDialog.close());
+/**
+ * Dismissing the welcome screen is itself a choice. Whichever way it was closed —
+ * the demo button, Escape, the backdrop — leaving on the demo means the demo is what
+ * should come back next time, so the screen is never shown to the same person twice.
+ * A folder mounted from inside the dialog has already recorded itself.
+ */
+welcomeDialog.addEventListener("close", () => {
+  if (!filesystem.isLocal) void rememberSource({ mode: "demo" });
+});
 getElement<HTMLButtonElement>("welcome-folder").addEventListener("click", () => void chooseFolder());
 
 window.addEventListener("keydown", (event) => {
@@ -543,5 +641,50 @@ window.addEventListener("pointerdown", (event) => {
   if (event.button === 0) world.setKeyboardNavigationActive(false);
 });
 
-void renderDirectory(false, "initial");
-welcomeDialog.showModal();
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Draws whatever the last visit earned, and reports whether the welcome screen is
+ * still owed. Only two things earn it: never having been here, and a remembered
+ * folder that has gone missing.
+ *
+ * A folder comes straight back when its grant survived — Chromium keeps one alive for
+ * folders the user has made persistent — and otherwise waits in the toolbar, since
+ * `requestPermission` cannot be called without a click no matter where it comes from.
+ * Every branch ends with exactly one world drawn, so nothing is rendered twice.
+ */
+async function settleInitialView(): Promise<boolean> {
+  const last = await recallSource();
+  if (last?.mode === "local") {
+    if ((await directoryPermission(last.handle, { request: false })) !== "granted") {
+      await renderDirectory(false, "initial");
+      offerRememberedDirectory(last.handle);
+      return false;
+    }
+    // A live grant that reads nothing means the folder itself is gone, and there is
+    // no offer to make: the demo comes up behind the welcome screen instead.
+    if (await mountRememberedDirectory(last.handle)) return false;
+  }
+  await renderDirectory(false, "initial");
+  return last?.mode !== "demo";
+}
+
+/**
+ * Reveals the interface once, in the right order: the settled world first, then the
+ * welcome screen a beat later if one is still owed, so the heading is not caught
+ * animating in behind a backdrop that is blurring it at the same time.
+ *
+ * The race is the concession to big directories — reading a few thousand entries is
+ * slower than anyone should stare at a black page for, so the demo backdrop comes up
+ * on time and the real folder lands in it when it is ready.
+ */
+async function start(): Promise<void> {
+  const settled = settleInitialView();
+  await Promise.race([settled, wait(600)]);
+  document.documentElement.dataset.boot = "ready";
+  if (!(await settled)) return;
+  await wait(140);
+  welcomeDialog.showModal();
+}
+
+void start();
