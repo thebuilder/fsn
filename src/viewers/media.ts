@@ -1,12 +1,18 @@
 import { categoryOf } from "../filesystem";
+import { createAudioAnalyser } from "./audio-analyser";
 import { el } from "./dom";
+import { bindTransportKeys, createTransport } from "./transport";
 import type { ViewerHost } from "./types";
+import type { CreateVisualizer, Visualizer } from "./visualizers/types";
 
-const BARS = 18;
-/** 256 samples → 128 bins, ~190 Hz each: fine enough to separate bass from presence. */
-const FFT_SIZE = 256;
-/** Highest bin a bar reads. The top of the range is mostly hiss, so it is left out. */
-const TOP_BIN = 96;
+/** Longest frame step we will integrate; a backgrounded tab must not lurch on return. */
+const MAX_DELTA = 1 / 20;
+
+const VISUALIZERS: Record<string, { label: string; load: () => Promise<CreateVisualizer> }> = {
+  grid: { label: "GRID", load: async () => (await import("./visualizers/grid")).createGridVisualizer },
+  bars: { label: "BARS", load: async () => (await import("./visualizers/bars")).createBarsVisualizer },
+  scope: { label: "SCOPE", load: async () => (await import("./visualizers/scope")).createScopeVisualizer },
+};
 
 export async function render(host: ViewerHost): Promise<void> {
   const isVideo = categoryOf(host.node) === "video";
@@ -15,23 +21,20 @@ export async function render(host: ViewerHost): Promise<void> {
   if (host.signal.aborted) return;
 
   const media = document.createElement(isVideo ? "video" : "audio");
-  media.controls = true;
   media.src = source;
   media.preload = "metadata";
+  // The deck draws its own transport; the browser's chrome would fight it.
+  media.controls = false;
   if (media instanceof HTMLVideoElement) media.playsInline = true;
 
-  const deck = el("div", "media-deck");
-  const display = el("div", `media-display${isVideo ? " is-slim" : ""}`);
-  const equalizer = el("div", "equalizer");
-  equalizer.setAttribute("aria-hidden", "true");
-  const bars = Array.from({ length: BARS }, (_, index) => {
-    const bar = el("i");
-    bar.style.setProperty("--bar", String((index * 7) % 13));
-    equalizer.append(bar);
-    return bar;
-  });
-  display.append(equalizer);
-  if (!isVideo) display.append(el("p", undefined, "AUDIO DATA STREAM"));
+  const deck = el("div", `media-deck${isVideo ? " is-video" : ""}`);
+  deck.tabIndex = 0;
+  const stage = el("div", "visualizer-stage");
+  if (isVideo) deck.append(media, stage);
+  else deck.append(stage, media);
+  deck.append(createTransport(media));
+  bindTransportKeys(deck, media);
+
   const credit = host.node.demoCredit;
   if (credit) {
     const line = el("p", "media-credit");
@@ -44,92 +47,119 @@ export async function render(host: ViewerHost): Promise<void> {
     } else {
       line.textContent = credit.text;
     }
-    display.append(line);
+    deck.append(line);
   }
 
-  // The picture leads for video; for audio the meter is the only thing to look at.
-  if (isVideo) deck.append(media, display);
-  else deck.append(display, media);
   host.mount(deck);
   host.setStatus("MEDIA READY");
 
-  attachAnalyser(media, bars, host);
+  const analyser = createAudioAnalyser(media);
+  // An AudioContext may only start from a gesture, so the graph waits for the first play.
+  media.addEventListener("play", analyser.start);
+  media.addEventListener("playing", analyser.start);
 
-  media.addEventListener("error", () => {
-    host.setStatus("STREAM UNSUPPORTED");
-    display.classList.add("is-dead");
-  });
-  media.addEventListener("playing", () => host.setStatus("STREAM PLAYING"));
-  media.addEventListener("pause", () => host.setStatus("STREAM PAUSED"));
-  media.addEventListener("ended", () => host.setStatus("END OF STREAM"));
-}
+  let visualizer: Visualizer | null = null;
+  let mounting = 0;
+  let mounted = "";
+  let choice: { select(id: string): void } | null = null;
 
-/**
- * Drives the equalizer from the real signal instead of a CSS loop. The graph is built
- * on first play because an AudioContext may only start from a user gesture, and
- * routing through it means the element's own output now flows via `destination`.
- */
-function attachAnalyser(media: HTMLMediaElement, bars: HTMLElement[], host: ViewerHost): void {
-  let context: AudioContext | undefined;
-  let frame = 0;
-  // An element can only be routed into one graph, so a failed attempt is never retried.
-  let started = false;
+  const bounds = (): { width: number; height: number } => {
+    const rect = stage.getBoundingClientRect();
+    return { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) };
+  };
 
-  const start = (): void => {
-    if (started) {
-      void context?.resume();
+  const mount = async (id: string): Promise<void> => {
+    const token = (mounting += 1);
+    const entry = VISUALIZERS[id];
+    if (!entry) return;
+    let create: CreateVisualizer;
+    try {
+      create = await entry.load();
+    } catch {
+      // The visualizers are separate chunks, so a switch can fail on a bad connection
+      // or against a dev server that has restarted under a stale page. Put the tab
+      // back on whatever is actually running rather than let it claim otherwise.
+      if (host.signal.aborted) return;
+      host.setStatus(`${entry.label} UNAVAILABLE / RELOAD TO RETRY`);
+      if (mounted) choice?.select(mounted);
       return;
     }
-    started = true;
-    try {
-      context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = FFT_SIZE;
-      analyser.smoothingTimeConstant = 0.75;
-      context.createMediaElementSource(media).connect(analyser);
-      analyser.connect(context.destination);
+    // A slow chunk must not replace a visualizer the operator has since switched away from.
+    if (host.signal.aborted || token !== mounting) return;
 
-      const spectrum = new Uint8Array(analyser.frequencyBinCount);
-      const bands = logBands(bars.length, Math.min(TOP_BIN, analyser.frequencyBinCount - 1));
-      const tick = (): void => {
-        frame = requestAnimationFrame(tick);
-        analyser.getByteFrequencyData(spectrum);
-        bars.forEach((bar, index) => {
-          const [from, to] = bands[index];
-          let sum = 0;
-          for (let bin = from; bin < to; bin += 1) sum += spectrum[bin];
-          bar.style.setProperty("--bar", ((sum / (to - from) / 255) * 16).toFixed(2));
-        });
-      };
-      frame = requestAnimationFrame(tick);
+    visualizer?.dispose();
+    visualizer = null;
+    stage.replaceChildren();
+    const { width, height } = bounds();
+    try {
+      visualizer = create(stage, width, height);
+      mounted = id;
     } catch {
-      // No Web Audio (or the source is tainted): the static bars remain.
-      void context?.close();
-      context = undefined;
+      // A refused WebGL context should not take the player down with it.
+      stage.replaceChildren(el("p", "visualizer-fallback", "VISUALIZER UNAVAILABLE ON THIS DISPLAY"));
     }
   };
 
-  media.addEventListener("play", start);
-  media.addEventListener("playing", start);
+  if (isVideo) {
+    // The picture is the visual; the meter is a garnish beneath it.
+    void mount("bars");
+  } else {
+    void mount("grid");
+    choice = host.addChoice({
+      label: "Visualizer",
+      options: Object.entries(VISUALIZERS).map(([id, entry]) => ({ id, label: entry.label })),
+      initial: "grid",
+      onChange: (id) => void mount(id),
+    });
+  }
+
+  const observer = new ResizeObserver(() => {
+    const { width, height } = bounds();
+    visualizer?.resize(width, height);
+  });
+  observer.observe(stage);
+
+  let frame = 0;
+  let previous = performance.now();
+  let elapsed = 0;
+  const tick = (now: number): void => {
+    frame = requestAnimationFrame(tick);
+    const delta = Math.min(MAX_DELTA, Math.max(0, (now - previous) / 1000));
+    previous = now;
+    elapsed += delta;
+    // No visibility check: the browser already stops serving frames to a hidden tab,
+    // and skipping work on a frame it *did* serve just leaves the stage blank.
+    if (!visualizer) return;
+    visualizer.frame(analyser.read(elapsed, delta, !media.paused && !media.ended));
+  };
+  frame = requestAnimationFrame(tick);
+
+  // After a jump the trail on screen belongs to a part of the track we are no longer
+  // in, so the visualizer drops its history rather than scrolling a lie off-stage.
+  media.addEventListener("seeked", () => visualizer?.reset?.());
+
+  media.addEventListener("error", () => {
+    host.setStatus("STREAM UNSUPPORTED");
+    deck.classList.add("is-dead");
+  });
+  media.addEventListener("playing", () => host.setStatus("STREAM PLAYING"));
+  media.addEventListener("pause", () => host.setStatus(media.currentTime === 0 ? "STREAM STOPPED" : "STREAM PAUSED"));
+  media.addEventListener("ended", () => host.setStatus("END OF STREAM"));
+
   host.onCleanup(() => {
     cancelAnimationFrame(frame);
+    observer.disconnect();
+    visualizer?.dispose();
     media.pause();
-    void context?.close();
+    analyser.close();
   });
-}
 
-/**
- * Splits the spectrum into logarithmic bands, the way hearing does. Linear bars would
- * spend most of their width on treble nobody notices and leave the bass in one column.
- */
-function logBands(count: number, topBin: number): Array<[number, number]> {
-  const bands: Array<[number, number]> = [];
-  let previous = 1;
-  for (let index = 1; index <= count; index += 1) {
-    const edge = Math.round(topBin ** (index / count));
-    const to = Math.max(previous + 1, Math.min(edge, topBin));
-    bands.push([previous, to]);
-    previous = to;
-  }
-  return bands;
+  /**
+   * Opening the object is itself a gesture, so this is usually permitted. When it is
+   * not, the deck just waits: there is no muted fallback, because a player that
+   * silently "plays" is worse than one that visibly needs a button pressed.
+   */
+  void media.play().catch(() => {
+    if (!host.signal.aborted) host.setStatus("READY / PRESS PLAY");
+  });
 }
