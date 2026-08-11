@@ -11,173 +11,90 @@
     --signal: #ff5b82;
     --mono: "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
   }
-  .floor {
-    position: absolute; inset: 46% -40% -34% -40%;
-    background-image:
-      linear-gradient(rgba(91,255,217,.26) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(91,255,217,.26) 1px, transparent 1px);
-    background-size: 68px 68px;
-    transform: perspective(560px) rotateX(69deg);
-    transform-origin: 50% 0;
-    -webkit-mask-image: linear-gradient(#000 8%, transparent 78%);
-  }
+  .scene { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
   .vignette {
     position: absolute; inset: 0;
-    background: radial-gradient(120% 90% at 30% 45%, transparent 35%, rgba(5,9,10,.86) 100%);
+    background:
+      linear-gradient(96deg, rgba(5,9,10,.94) 0%, rgba(5,9,10,.82) 26%, rgba(5,9,10,.3) 46%, transparent 60%),
+      radial-gradient(128% 104% at 66% 46%, transparent 42%, rgba(5,9,10,.88) 100%);
   }
-  .copy { position: absolute; top: 104px; left: 92px; width: 560px; }
-  .mark { display: flex; align-items: center; gap: 18px; margin-bottom: 46px; }
-  .glyph { position: relative; width: 54px; height: 54px; transform: rotate(-8deg); }
+  .copy { position: absolute; top: 84px; left: 84px; width: 640px; }
+  .mark { display: flex; align-items: center; gap: 19px; margin-bottom: 54px; }
+  .glyph { position: relative; width: 58px; height: 58px; transform: rotate(-8deg); }
   .glyph i {
-    position: absolute; inset: 3px 14px;
+    position: absolute; inset: 3px 15px;
     border: 1.5px solid var(--phosphor);
     background: rgba(134,250,221,.05);
     transform: skewY(-27deg);
     box-shadow: 0 0 18px rgba(134,250,221,.22);
   }
-  .glyph i:nth-child(2) { transform: translate(8px, 6px) skewY(-27deg); opacity: .62; }
-  .glyph i:nth-child(3) { transform: translate(16px, 12px) skewY(-27deg); opacity: .3; }
-  .wordmark strong { display: block; font: 800 25px/1 var(--mono); letter-spacing: .19em; }
-  .wordmark small { display: block; margin-top: 5px; color: #87a39d; font: 600 11px/1 var(--mono); letter-spacing: .19em; }
-  h1 { font: 550 88px/.94 inherit; letter-spacing: -.045em; }
+  .glyph i:nth-child(2) { transform: translate(9px, 6px) skewY(-27deg); opacity: .62; }
+  .glyph i:nth-child(3) { transform: translate(18px, 12px) skewY(-27deg); opacity: .3; }
+  .wordmark strong { display: block; font: 800 27px/1 var(--mono); letter-spacing: .19em; }
+  .wordmark small { display: block; margin-top: 6px; color: #8fada6; font: 600 12px/1 var(--mono); letter-spacing: .19em; }
+  /* longhands: the font shorthand takes a family list, not the CSS-wide keyword inherit */
+  h1 { font-size: 114px; font-weight: 700; line-height: .93; letter-spacing: -.05em; }
   h1 em { display: block; font-style: normal; color: var(--phosphor); }
-  p.sub { margin-top: 30px; max-width: 480px; color: #a8bbb5; font-size: 22px; line-height: 1.45; }
-  .foot {
-    position: absolute; left: 92px; bottom: 74px;
-    display: flex; align-items: center; gap: 12px;
-    color: #7f9a93; font: 650 12.5px var(--mono); letter-spacing: .15em;
-  }
-  .foot i { width: 7px; height: 7px; border-radius: 50%; background: var(--phosphor); box-shadow: 0 0 10px var(--phosphor); }
-  .art { position: absolute; top: 52%; right: 8px; width: 690px; transform: translateY(-50%); }
-  .art svg { display: block; width: 100%; height: auto; filter: drop-shadow(0 26px 34px rgba(0,0,0,.6)); }
-  .scan {
-    position: absolute; inset: 0;
-    background: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,.10) 3px 4px);
-  }
+  p.sub { margin-top: 34px; max-width: 600px; color: #b7cbc5; font-size: 31px; line-height: 1.4; letter-spacing: -.01em; }
+  /* one sentence per line — left to wrap, it breaks mid-sentence */
+  p.sub span { display: block; }
   .edge { position: absolute; inset: 0; border-top: 3px solid var(--signal); }
 </style></head><body>
-  <div class="floor"></div>
+  <svg class="scene" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="grid-fade" gradientUnits="userSpaceOnUse" cx="760" cy="340" r="620"
+        gradientTransform="translate(760 340) scale(1 .52) translate(-760 -340)">
+        <stop offset="0%" stop-color="#fff" stop-opacity="1"/>
+        <stop offset="38%" stop-color="#fff" stop-opacity=".82"/>
+        <stop offset="70%" stop-color="#fff" stop-opacity=".34"/>
+        <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+      </radialGradient>
+      <mask id="grid-mask"><rect width="1200" height="630" fill="url(#grid-fade)"/></mask>
+      <pattern id="iso-minor" patternUnits="userSpaceOnUse" x="10" y="19" width="56" height="28">
+        <path d="M0 0 L56 28 M0 28 L56 0" fill="none" stroke="#5bffd9" stroke-opacity=".22" stroke-width="1"/>
+      </pattern>
+      <pattern id="iso-major" patternUnits="userSpaceOnUse" x="66" y="131" width="280" height="140">
+        <path d="M0 0 L280 140 M0 140 L280 0" fill="none" stroke="#5bffd9" stroke-opacity=".36" stroke-width="1"/>
+      </pattern>
+      <radialGradient id="halo" gradientUnits="userSpaceOnUse" cx="906" cy="362" r="400"
+        gradientTransform="translate(906 362) scale(1 .66) translate(-906 -362)">
+        <stop offset="0%" stop-color="#64ffd8" stop-opacity=".26"/>
+        <stop offset="100%" stop-color="#64ffd8" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="city-shadow" x="-25%" y="-25%" width="150%" height="150%">
+        <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#010505" flood-opacity=".6"/>
+      </filter>
+    </defs>
+    <circle cx="906" cy="362" r="400" fill="url(#halo)"/>
+    <g mask="url(#grid-mask)">
+      <rect width="1200" height="630" fill="url(#iso-minor)"/>
+      <rect width="1200" height="630" fill="url(#iso-major)"/>
+    </g>
+    <g filter="url(#city-shadow)">
+      <polygon points="883,177 906,188.5 906,310.5 883,299" fill="#358378"/><polygon points="906,188.5 929,177 929,299 906,310.5" fill="#23564f"/><polygon points="906,165.5 929,177 906,188.5 883,177" fill="#5ce1cf"/>
+      <polygon points="911,225 934,236.5 934,324.5 911,313" fill="#358378"/><polygon points="934,236.5 957,225 957,313 934,324.5" fill="#23564f"/><polygon points="934,213.5 957,225 934,236.5 911,225" fill="#5ce1cf"/>
+      <polygon points="855,217 878,228.5 878,324.5 855,313" fill="#516f94"/><polygon points="878,228.5 901,217 901,313 878,324.5" fill="#354961"/><polygon points="878,205.5 901,217 878,228.5 855,217" fill="#8bbfff"/>
+      <polygon points="883,261 906,272.5 906,338.5 883,327" fill="#358378"/><polygon points="906,272.5 929,261 929,327 906,338.5" fill="#23564f"/><polygon points="906,249.5 929,261 906,272.5 883,261" fill="#5ce1cf"/>
+      <polygon points="1023,263 1046,274.5 1046,380.5 1023,369" fill="#94570d"/><polygon points="1046,274.5 1069,263 1069,369 1046,380.5" fill="#613909"/><polygon points="1046,251.5 1069,263 1046,274.5 1023,263" fill="#ff9617"/>
+      <polygon points="743,271 766,282.5 766,380.5 743,369" fill="#6b5194"/><polygon points="766,282.5 789,271 789,369 766,380.5" fill="#463561"/><polygon points="766,259.5 789,271 766,282.5 743,271" fill="#b88cff"/>
+      <polygon points="1051,305 1074,316.5 1074,394.5 1051,383" fill="#94570d"/><polygon points="1074,316.5 1097,305 1097,383 1074,394.5" fill="#613909"/><polygon points="1074,293.5 1097,305 1074,316.5 1051,305" fill="#ff9617"/>
+      <polygon points="995,299 1018,310.5 1018,394.5 995,383" fill="#85813f"/><polygon points="1018,310.5 1041,299 1041,383 1018,394.5" fill="#575429"/><polygon points="1018,287.5 1041,299 1018,310.5 995,299" fill="#e6de6d"/>
+      <polygon points="771,313 794,324.5 794,394.5 771,383" fill="#6b5194"/><polygon points="794,324.5 817,313 817,383 794,394.5" fill="#463561"/><polygon points="794,301.5 817,313 794,324.5 771,313" fill="#b88cff"/>
+      <polygon points="715,305 738,316.5 738,394.5 715,383" fill="#516f94"/><polygon points="738,316.5 761,305 761,383 738,394.5" fill="#354961"/><polygon points="738,293.5 761,305 738,316.5 715,305" fill="#8bbfff"/>
+      <polygon points="883,349 906,360.5 906,450.5 883,439" fill="#8c3149"/><polygon points="906,360.5 929,349 929,439 906,450.5" fill="#5c2030"/><polygon points="906,337.5 929,349 906,360.5 883,349" fill="#f2557e"/>
+      <polygon points="911,389 934,400.5 934,464.5 911,453" fill="#8c3149"/><polygon points="934,400.5 957,389 957,453 934,464.5" fill="#5c2030"/><polygon points="934,377.5 957,389 934,400.5 911,389" fill="#f2557e"/>
+      <polygon points="855,379 878,390.5 878,464.5 855,453" fill="#358378"/><polygon points="878,390.5 901,379 901,453 878,464.5" fill="#23564f"/><polygon points="878,367.5 901,379 878,390.5 855,379" fill="#5ce1cf"/>
+      <polygon points="883,419 906,430.5 906,478.5 883,467" fill="#8c3149"/><polygon points="906,430.5 929,419 929,467 906,478.5" fill="#5c2030"/><polygon points="906,407.5 929,419 906,430.5 883,419" fill="#f2557e"/>
+    </g>
+  </svg>
   <div class="vignette"></div>
-  <div class="art"><svg viewBox="0 0 600 470" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="og-halo" cx="50%" cy="55%" r="55%">
-      <stop offset="0%" stop-color="#64ffd8" stop-opacity=".26"/>
-      <stop offset="100%" stop-color="#64ffd8" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="og-fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#fff" stop-opacity="0"/>
-      <stop offset="42%" stop-color="#fff" stop-opacity=".85"/>
-      <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
-    <mask id="og-mask"><rect width="600" height="470" fill="url(#og-fade)"/></mask>
-  </defs>
-  <ellipse cx="300" cy="250" rx="290" ry="200" fill="url(#og-halo)"/>
-  <g stroke="#5bffd9" stroke-opacity=".22" stroke-width="1.2" mask="url(#og-mask)">
-    <line x1="305.6" y1="53.2" x2="-41.6" y2="226.8"/>
-    <line x1="294.4" y1="53.2" x2="641.6" y2="226.8"/>
-    <line x1="361.6" y1="81.2" x2="14.4" y2="254.8"/>
-    <line x1="238.4" y1="81.2" x2="585.6" y2="254.8"/>
-    <line x1="417.6" y1="109.2" x2="70.4" y2="282.8"/>
-    <line x1="182.4" y1="109.2" x2="529.6" y2="282.8"/>
-    <line x1="473.6" y1="137.2" x2="126.4" y2="310.8"/>
-    <line x1="126.4" y1="137.2" x2="473.6" y2="310.8"/>
-    <line x1="529.6" y1="165.2" x2="182.4" y2="338.8"/>
-    <line x1="70.4" y1="165.2" x2="417.6" y2="338.8"/>
-    <line x1="585.6" y1="193.2" x2="238.4" y2="366.8"/>
-    <line x1="14.4" y1="193.2" x2="361.6" y2="366.8"/>
-  </g>
-  <g>
-    <g>
-      <polygon points="258,102 300,123 300,161 258,140" fill="#2f9f8b"/>
-      <polygon points="300,123 342,102 342,140 300,161" fill="#19685b"/>
-      <polygon points="300,81 342,102 300,123 258,102" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="314,94 356,115 356,189 314,168" fill="#dc4a72"/>
-      <polygon points="356,115 398,94 398,168 356,189" fill="#9c2b4b"/>
-      <polygon points="356,73 398,94 356,115 314,94" fill="#ff8ba6"/>
-    </g>
-    <g>
-      <polygon points="202,106 244,127 244,189 202,168" fill="#2f9f8b"/>
-      <polygon points="244,127 286,106 286,168 244,189" fill="#19685b"/>
-      <polygon points="244,85 286,106 244,127 202,106" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="370,166 412,187 412,217 370,196" fill="#2f9f8b"/>
-      <polygon points="412,187 454,166 454,196 412,217" fill="#19685b"/>
-      <polygon points="412,145 454,166 412,187 370,166" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="258,100 300,121 300,217 258,196" fill="#dc4a72"/>
-      <polygon points="300,121 342,100 342,196 300,217" fill="#9c2b4b"/>
-      <polygon points="300,79 342,100 300,121 258,100" fill="#ff8ba6"/>
-    </g>
-    <g>
-      <polygon points="146,162 188,183 188,217 146,196" fill="#2f9f8b"/>
-      <polygon points="188,183 230,162 230,196 188,217" fill="#19685b"/>
-      <polygon points="188,141 230,162 188,183 146,162" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="426,172 468,193 468,245 426,224" fill="#2f9f8b"/>
-      <polygon points="468,193 510,172 510,224 468,245" fill="#19685b"/>
-      <polygon points="468,151 510,172 468,193 426,172" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="314,180 356,201 356,245 314,224" fill="#2f9f8b"/>
-      <polygon points="356,201 398,180 398,224 356,245" fill="#19685b"/>
-      <polygon points="356,159 398,180 356,201 314,180" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="202,174 244,195 244,245 202,224" fill="#2f9f8b"/>
-      <polygon points="244,195 286,174 286,224 244,245" fill="#19685b"/>
-      <polygon points="244,153 286,174 244,195 202,174" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="90,168 132,189 132,245 90,224" fill="#dc4a72"/>
-      <polygon points="132,189 174,168 174,224 132,245" fill="#9c2b4b"/>
-      <polygon points="132,147 174,168 132,189 90,168" fill="#ff8ba6"/>
-    </g>
-    <g>
-      <polygon points="370,226 412,247 412,273 370,252" fill="#2f9f8b"/>
-      <polygon points="412,247 454,226 454,252 412,273" fill="#19685b"/>
-      <polygon points="412,205 454,226 412,247 370,226" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="258,170 300,191 300,273 258,252" fill="#dc4a72"/>
-      <polygon points="300,191 342,170 342,252 300,273" fill="#9c2b4b"/>
-      <polygon points="300,149 342,170 300,191 258,170" fill="#ff8ba6"/>
-    </g>
-    <g>
-      <polygon points="146,222 188,243 188,273 146,252" fill="#2f9f8b"/>
-      <polygon points="188,243 230,222 230,252 188,273" fill="#19685b"/>
-      <polygon points="188,201 230,222 188,243 146,222" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="314,240 356,261 356,301 314,280" fill="#2f9f8b"/>
-      <polygon points="356,261 398,240 398,280 356,301" fill="#19685b"/>
-      <polygon points="356,219 398,240 356,261 314,240" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="202,234 244,255 244,301 202,280" fill="#2f9f8b"/>
-      <polygon points="244,255 286,234 286,280 244,301" fill="#19685b"/>
-      <polygon points="244,213 286,234 244,255 202,234" fill="#7cf0d8"/>
-    </g>
-    <g>
-      <polygon points="258,240 300,261 300,329 258,308" fill="#2f9f8b"/>
-      <polygon points="300,261 342,240 342,308 300,329" fill="#19685b"/>
-      <polygon points="300,219 342,240 300,261 258,240" fill="#7cf0d8"/>
-    </g>
-  </g>
-</svg></div>
   <div class="copy">
     <div class="mark">
       <div class="glyph"><i></i><i></i><i></i></div>
       <div class="wordmark"><strong>FSN</strong><small>FILE SYSTEM NAVIGATOR</small></div>
     </div>
-    <h1>Your files,<em>as a world.</em></h1>
-    <p class="sub">Fly through your filesystem as a 3D city. Directories are districts, files are towers.</p>
+    <h1>Enter the<em>file system.</em></h1>
+    <p class="sub"><span>There’s a world inside your machine.</span><span>Go see what’s in it.</span></p>
   </div>
-  <div class="foot"><i></i>READ-ONLY · NOTHING LEAVES YOUR BROWSER</div>
-  <div class="scan"></div>
   <div class="edge"></div>
 </body></html>

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#060a0b" />
-    <meta name="description" content="Explore your filesystem as a 3D city: directories are districts, files are towers. Read-only, and nothing ever leaves your browser." />
+    <meta name="description" content="Fly through your file system as a 3D city: directories are districts, files are towers. Read-only, and nothing ever leaves your browser." />
     <title>FSN: 3D File System Navigator</title>
     <style>html{background:#05090a;color-scheme:dark}</style>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
@@ -13,19 +13,19 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="FSN" />
     <meta property="og:url" content="__SITE_URL__/" />
-    <meta property="og:title" content="FSN: Your files, as a world." />
-    <meta property="og:description" content="Explore your filesystem as a 3D city: directories are districts, files are towers. Read-only, and nothing ever leaves your browser." />
+    <meta property="og:title" content="FSN: Enter the file system." />
+    <meta property="og:description" content="There’s a world inside your machine. Go see what’s in it." />
     <meta property="og:image" content="__SITE_URL__/og.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="An isometric city of teal and pink blocks on a phosphor grid, beside the FSN wordmark." />
+    <meta property="og:image:alt" content="Four clusters of coloured isometric columns, one per directory, standing on a phosphor grid, beside the FSN wordmark." />
     <meta property="og:locale" content="en_GB" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="FSN: Your files, as a world." />
-    <meta name="twitter:description" content="Explore your filesystem as a 3D city: directories are districts, files are towers. Read-only, and nothing ever leaves your browser." />
+    <meta name="twitter:title" content="FSN: Enter the file system." />
+    <meta name="twitter:description" content="There’s a world inside your machine. Go see what’s in it." />
     <meta name="twitter:image" content="__SITE_URL__/og.png" />
-    <meta name="twitter:image:alt" content="An isometric city of teal and pink blocks on a phosphor grid, beside the FSN wordmark." />
+    <meta name="twitter:image:alt" content="Four clusters of coloured isometric columns, one per directory, standing on a phosphor grid, beside the FSN wordmark." />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -124,87 +124,57 @@
 
     <dialog class="welcome-dialog" id="welcome-dialog" aria-labelledby="welcome-title">
       <div class="welcome-visual" aria-hidden="true">
-        <svg class="welcome-art" viewBox="0 0 420 300" role="img" aria-label="An isometric city of file blocks on a grid" preserveAspectRatio="xMidYMid meet">
+        <svg class="welcome-art" viewBox="0 0 420 300" role="img" aria-label="Three clusters of isometric columns, one per directory, standing on a grid" preserveAspectRatio="xMidYMid meet">
           <defs>
-            <radialGradient id="welcome-halo" cx="50%" cy="52%" r="52%">
+            <radialGradient id="welcome-halo" gradientUnits="userSpaceOnUse" cx="210" cy="180" r="180"
+              gradientTransform="translate(210 180) scale(1 .66) translate(-210 -180)">
               <stop offset="0%" stop-color="#64ffd8" stop-opacity=".22"/>
               <stop offset="100%" stop-color="#64ffd8" stop-opacity="0"/>
             </radialGradient>
-            <linearGradient id="welcome-floor-fade" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#fff" stop-opacity="0"/>
-              <stop offset="38%" stop-color="#fff" stop-opacity=".9"/>
+            <radialGradient id="welcome-floor-fade" gradientUnits="userSpaceOnUse" cx="210" cy="170" r="290"
+              gradientTransform="translate(210 170) scale(1 .56) translate(-210 -170)">
+              <stop offset="0%" stop-color="#fff" stop-opacity="1"/>
+              <stop offset="42%" stop-color="#fff" stop-opacity=".8"/>
+              <stop offset="74%" stop-color="#fff" stop-opacity=".3"/>
               <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
-            </linearGradient>
+            </radialGradient>
             <mask id="welcome-floor-mask">
               <rect width="420" height="300" fill="url(#welcome-floor-fade)"/>
             </mask>
+            <pattern id="welcome-grid-minor" patternUnits="userSpaceOnUse" x="42" y="27" width="56" height="28">
+              <!-- 1.4 units: the panel renders this viewBox at ~0.66, so a 1-unit
+                   stroke would land sub-pixel and wash out. -->
+              <path d="M0 0 L56 28 M0 28 L56 0" fill="none" stroke="#5bffd9" stroke-opacity=".3" stroke-width="1.4"/>
+            </pattern>
+            <pattern id="welcome-grid-major" patternUnits="userSpaceOnUse" x="210" y="139" width="280" height="140">
+              <!-- 1.4 units: the panel renders this viewBox at ~0.66, so a 1-unit
+                   stroke would land sub-pixel and wash out. -->
+              <path d="M0 0 L280 140 M0 140 L280 0" fill="none" stroke="#5bffd9" stroke-opacity=".48" stroke-width="1.4"/>
+            </pattern>
           </defs>
-          <ellipse cx="210" cy="168" rx="190" ry="120" fill="url(#welcome-halo)"/>
-          <g stroke="#5bffd9" stroke-opacity=".26" stroke-width="1" mask="url(#welcome-floor-mask)">
-            <line x1="210" y1="41" x2="-20" y2="156"/>
-            <line x1="210" y1="41" x2="440" y2="156"/>
-            <line x1="256" y1="64" x2="26" y2="179"/>
-            <line x1="164" y1="64" x2="394" y2="179"/>
-            <line x1="302" y1="87" x2="72" y2="202"/>
-            <line x1="118" y1="87" x2="348" y2="202"/>
-            <line x1="348" y1="110" x2="118" y2="225"/>
-            <line x1="72" y1="110" x2="302" y2="225"/>
-            <line x1="394" y1="133" x2="164" y2="248"/>
-            <line x1="26" y1="133" x2="256" y2="248"/>
+          <circle cx="210" cy="180" r="180" fill="url(#welcome-halo)"/>
+          <g mask="url(#welcome-floor-mask)">
+            <rect width="420" height="300" fill="url(#welcome-grid-minor)"/>
+            <rect width="420" height="300" fill="url(#welcome-grid-major)"/>
           </g>
           <g>
-            <g>
-              <polygon points="176,80 210,97 210,127 176,110" fill="#2f9f8b"/>
-              <polygon points="210,97 244,80 244,110 210,127" fill="#1a6f61"/>
-              <polygon points="210,63 244,80 210,97 176,80" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="222,79 256,96 256,150 222,133" fill="#dc4a72"/>
-              <polygon points="256,96 290,79 290,133 256,150" fill="#a32e4f"/>
-              <polygon points="256,62 290,79 256,96 222,79" fill="#ff8ba6"/>
-            </g>
-            <g>
-              <polygon points="130,89 164,106 164,150 130,133" fill="#2f9f8b"/>
-              <polygon points="164,106 198,89 198,133 164,150" fill="#1a6f61"/>
-              <polygon points="164,72 198,89 164,106 130,89" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="268,134 302,151 302,173 268,156" fill="#2f9f8b"/>
-              <polygon points="302,151 336,134 336,156 302,173" fill="#1a6f61"/>
-              <polygon points="302,117 336,134 302,151 268,134" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="176,84 210,101 210,173 176,156" fill="#dc4a72"/>
-              <polygon points="210,101 244,84 244,156 210,173" fill="#a32e4f"/>
-              <polygon points="210,67 244,84 210,101 176,84" fill="#ff8ba6"/>
-            </g>
-            <g>
-              <polygon points="84,130 118,147 118,173 84,156" fill="#2f9f8b"/>
-              <polygon points="118,147 152,130 152,156 118,173" fill="#1a6f61"/>
-              <polygon points="118,113 152,130 118,147 84,130" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="222,145 256,162 256,196 222,179" fill="#2f9f8b"/>
-              <polygon points="256,162 290,145 290,179 256,196" fill="#1a6f61"/>
-              <polygon points="256,128 290,145 256,162 222,145" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="130,141 164,158 164,196 130,179" fill="#2f9f8b"/>
-              <polygon points="164,158 198,141 198,179 164,196" fill="#1a6f61"/>
-              <polygon points="164,124 198,141 164,158 130,141" fill="#7cf0d8"/>
-            </g>
-            <g>
-              <polygon points="176,144 210,161 210,219 176,202" fill="#dc4a72"/>
-              <polygon points="210,161 244,144 244,202 210,219" fill="#a32e4f"/>
-              <polygon points="210,127 244,144 210,161 176,144" fill="#ff8ba6"/>
-            </g>
+            <polygon points="187,49 210,60.5 210,178.5 187,167" fill="#358378"/><polygon points="210,60.5 233,49 233,167 210,178.5" fill="#23564f"/><polygon points="210,37.5 233,49 210,60.5 187,49" fill="#5ce1cf"/>
+            <polygon points="215,95 238,106.5 238,192.5 215,181" fill="#358378"/><polygon points="238,106.5 261,95 261,181 238,192.5" fill="#23564f"/><polygon points="238,83.5 261,95 238,106.5 215,95" fill="#5ce1cf"/>
+            <polygon points="159,87 182,98.5 182,192.5 159,181" fill="#516f94"/><polygon points="182,98.5 205,87 205,181 182,192.5" fill="#354961"/><polygon points="182,75.5 205,87 182,98.5 159,87" fill="#8bbfff"/>
+            <polygon points="187,131 210,142.5 210,206.5 187,195" fill="#358378"/><polygon points="210,142.5 233,131 233,195 210,206.5" fill="#23564f"/><polygon points="210,119.5 233,131 210,142.5 187,131" fill="#5ce1cf"/>
+            <polygon points="327,137 350,148.5 350,248.5 327,237" fill="#8c3149"/><polygon points="350,148.5 373,137 373,237 350,248.5" fill="#5c2030"/><polygon points="350,125.5 373,137 350,148.5 327,137" fill="#f2557e"/>
+            <polygon points="47,141 70,152.5 70,248.5 47,237" fill="#94570d"/><polygon points="70,152.5 93,141 93,237 70,248.5" fill="#613909"/><polygon points="70,129.5 93,141 70,152.5 47,141" fill="#ff9617"/>
+            <polygon points="355,179 378,190.5 378,262.5 355,251" fill="#8c3149"/><polygon points="378,190.5 401,179 401,251 378,262.5" fill="#5c2030"/><polygon points="378,167.5 401,179 378,190.5 355,179" fill="#f2557e"/>
+            <polygon points="299,171 322,182.5 322,262.5 299,251" fill="#8c3149"/><polygon points="322,182.5 345,171 345,251 322,262.5" fill="#5c2030"/><polygon points="322,159.5 345,171 322,182.5 299,171" fill="#f2557e"/>
+            <polygon points="75,183 98,194.5 98,262.5 75,251" fill="#94570d"/><polygon points="98,194.5 121,183 121,251 98,262.5" fill="#613909"/><polygon points="98,171.5 121,183 98,194.5 75,183" fill="#ff9617"/>
+            <polygon points="19,175 42,186.5 42,262.5 19,251" fill="#85813f"/><polygon points="42,186.5 65,175 65,251 42,262.5" fill="#575429"/><polygon points="42,163.5 65,175 42,186.5 19,175" fill="#e6de6d"/>
           </g>
         </svg>
       </div>
       <div class="welcome-copy">
         <p class="eyebrow">SYSTEM READY</p>
-        <h2 id="welcome-title"><span>Your files,</span> <span>as a world.</span></h2>
-        <p>Explore a generated filesystem now, or open a folder from your computer. Everything stays in this browser.</p>
+        <h2 id="welcome-title"><span>Enter the</span> <span>file system.</span></h2>
+        <p>Fly through a generated file system now, or open a folder from your computer. Everything stays in this browser.</p>
         <div class="welcome-actions">
           <button class="button button-primary" id="welcome-demo" type="button">Explore demo</button>
           <button class="button button-secondary" id="welcome-folder" type="button">Open local folder</button>
