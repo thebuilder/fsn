@@ -87,6 +87,87 @@ export function sortNodes(nodes: FsNode[]): FsNode[] {
   });
 }
 
+export type SearchMatch = {
+  node: FsNode;
+  /** Directory chain from the filesystem root down to the match's parent. */
+  trail: FsNode[];
+};
+
+export type SearchOutcome = {
+  matches: SearchMatch[];
+  /** Every match found, including the ones trimmed off by the limit. */
+  total: number;
+  /** Directories that exist but have not been read from disk yet, so their contents are invisible. */
+  unreadDirectories: number;
+  /** False when the walk hit its ceiling, so the counts above are lower bounds. */
+  complete: boolean;
+};
+
+/** Ceiling on how many nodes a single query may walk, so a huge tree cannot freeze the frame. */
+const searchVisitLimit = 20000;
+/** Candidates kept for ranking; anything past this is counted but never shown. */
+const searchCandidateLimit = 200;
+
+/**
+ * Walks breadth-first from `base` (an ancestry chain ending at the directory to search),
+ * so shallow matches are found first. Recursion only follows directories already read
+ * into memory — searching never triggers new disk access.
+ */
+export function searchFilesystem(
+  base: FsNode[],
+  query: string,
+  options: { recursive: boolean; limit: number },
+): SearchOutcome {
+  const normalized = query.trim().toLowerCase();
+  const candidates: SearchMatch[] = [];
+  const queue: FsNode[][] = [base];
+  let total = 0;
+  let unreadDirectories = 0;
+  let visited = 0;
+  let complete = true;
+
+  while (queue.length) {
+    const trail = queue.shift() as FsNode[];
+    const children = sortNodes(trail[trail.length - 1].children ?? []);
+    for (const node of children) {
+      visited += 1;
+      if (visited > searchVisitLimit) {
+        complete = false;
+        queue.length = 0;
+        break;
+      }
+      if (!normalized || node.name.toLowerCase().includes(normalized)) {
+        total += 1;
+        if (candidates.length < searchCandidateLimit) candidates.push({ node, trail });
+      }
+      if (node.kind !== "directory") continue;
+      if (node.children) {
+        if (options.recursive) queue.push([...trail, node]);
+      } else if (options.recursive) {
+        unreadDirectories += 1;
+      }
+    }
+  }
+
+  candidates.sort((a, b) => {
+    const rank = matchRank(a.node.name, normalized) - matchRank(b.node.name, normalized);
+    if (rank !== 0) return rank;
+    if (a.trail.length !== b.trail.length) return a.trail.length - b.trail.length;
+    if (a.node.kind !== b.node.kind) return a.node.kind === "directory" ? -1 : 1;
+    return a.node.name.localeCompare(b.node.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+
+  return { matches: candidates.slice(0, options.limit), total, unreadDirectories, complete };
+}
+
+/** Name matches sort ahead of the rest: whole prefix, then word start, then anywhere. */
+function matchRank(name: string, query: string): number {
+  if (!query) return 2;
+  const index = name.toLowerCase().indexOf(query);
+  if (index === 0) return 0;
+  return index > 0 && /[\s._\-/]/.test(name[index - 1]) ? 1 : 2;
+}
+
 export function pathFor(node: FsNode, ancestry: FsNode[]): string {
   const index = ancestry.findIndex((ancestor) => ancestor.id === node.parentId);
   const base = index >= 0 ? ancestry.slice(0, index + 1).map((part) => part.name) : ancestry.map((part) => part.name);
