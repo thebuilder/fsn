@@ -22,6 +22,29 @@ export type Choice = {
 };
 
 /**
+ * The shape a renderer would like its window to take. The host owns the arithmetic;
+ * a renderer only describes the region it wants shown whole.
+ */
+export type WindowFit = {
+  /** Width ÷ height of that region — an image's pixels, a video's frame, a page. */
+  aspect: number;
+  /**
+   * The element holding that region. Whatever the content lays out around it — its own
+   * padding, a caption, a transport — is measured off this and kept, so the window ends
+   * up exactly as large as the region plus its furniture.
+   */
+  region?: HTMLElement;
+  /** Largest useful width for the region, so a 64px icon does not get a 1000px window. */
+  maxWidth?: number;
+  /**
+   * Whether the window may give up width to keep the aspect once the viewport has
+   * capped its height. True for pictures, which would otherwise sit in a wide letterbox;
+   * false for readers that need their width whatever shape the content is.
+   */
+  narrow?: boolean;
+};
+
+/**
  * Everything a renderer is allowed to touch. Renderers never see the dialog, the
  * toolbar or each other; the host owns the chrome and the lifetime, which is what
  * lets every renderer be an independently loaded chunk.
@@ -37,6 +60,8 @@ export type ViewerHost = {
   /** URL valid until the viewer closes; object URLs are revoked for you. */
   url(): Promise<string>;
   mount(element: Element): void;
+  /** Asks the window to take a shape that suits this object. Ignored once the reader resizes. */
+  fitWindow(fit: WindowFit): void;
   setMode(label: string): void;
   setStatus(label: string): void;
   addToggle(spec: ToggleSpec): void;

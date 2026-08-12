@@ -1,7 +1,7 @@
 import { formatBytes, type FsNode } from "./filesystem";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
-import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost } from "./viewers/types";
+import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost, WindowFit } from "./viewers/types";
 
 type ViewerElements = {
   dialog: HTMLDialogElement;
@@ -33,6 +33,8 @@ const VIEWPORT_INSET = 16;
 const DRAG_MARGIN = 96;
 const KEY_RESIZE_STEP = 16;
 const KEY_RESIZE_STEP_LARGE = 64;
+/** Below this the stylesheet gives the viewer the whole screen, so there is no window to shape. */
+const FULLSCREEN_WINDOW = "(max-width: 600px)";
 
 /**
  * Owns the viewer window: chrome, object lifetime and dispatch. The actual rendering
@@ -49,6 +51,11 @@ export class FileViewer {
   private maximized = false;
   private collapsed = false;
   private restoreGeometry: Geometry | null = null;
+  /** The shape the current object asked for, kept so a viewport resize can re-fit. */
+  private fit: WindowFit | null = null;
+  /** Whether the size on the dialog came from a fit rather than from the reader's own hand. */
+  private fitted = false;
+  private fitFrame = 0;
 
   constructor(private readonly elements: ViewerElements) {
     elements.close.addEventListener("click", () => elements.dialog.close());
@@ -68,11 +75,19 @@ export class FileViewer {
     });
     elements.grow.addEventListener("pointerdown", (event) => this.startResize(event));
     elements.grow.addEventListener("keydown", (event) => this.resizeByKey(event));
-    window.addEventListener("resize", () => this.applyGeometry());
+    window.addEventListener("resize", () => {
+      this.scheduleFit();
+      this.applyGeometry();
+    });
   }
 
   async open(node: FsNode, path: string): Promise<void> {
     this.reset();
+    // A size the last object asked for means nothing to this one; a size the reader
+    // dragged out themselves is theirs to keep until they open something with an opinion.
+    this.fit = null;
+    cancelAnimationFrame(this.fitFrame);
+    if (this.fitted) this.clearSize();
     this.elements.title.textContent = node.name;
     this.elements.path.textContent = path;
     this.elements.size.textContent = formatBytes(node.size);
@@ -134,6 +149,11 @@ export class FileViewer {
       },
       mount: (element) => {
         if (!signal.aborted) this.elements.content.replaceChildren(element);
+      },
+      fitWindow: (fit) => {
+        if (signal.aborted) return;
+        this.fit = fit;
+        this.scheduleFit(signal);
       },
       setMode: (label) => {
         if (!signal.aborted) this.elements.mode.textContent = label;
@@ -227,6 +247,9 @@ export class FileViewer {
    * grow box track the pointer instead of running away at double speed.
    */
   private resizeTo(width: number, height: number, from: WindowBox): void {
+    // The reader has taken over the size, so the object's own preference stops applying.
+    this.fit = null;
+    this.fitted = false;
     const nextWidth = clamp(width, MIN_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - VIEWPORT_INSET));
     const nextHeight = clamp(height, MIN_HEIGHT, Math.max(MIN_HEIGHT, window.innerHeight - VIEWPORT_INSET));
     this.elements.dialog.style.width = `${nextWidth}px`;
@@ -251,6 +274,8 @@ export class FileViewer {
       this.offsetX = this.restoreGeometry.x;
       this.offsetY = this.restoreGeometry.y;
       this.restoreGeometry = null;
+      // An object opened while the window was zoomed never got its shape; it does now.
+      this.applyFit();
     }
     this.elements.zoom.setAttribute("aria-pressed", String(next));
     this.elements.zoom.setAttribute("aria-label", next ? "Restore window size" : "Maximize window");
@@ -275,6 +300,70 @@ export class FileViewer {
   }
 
   /**
+   * Fits on a frame rather than now: content is often only just mounted, and a page the
+   * browser has not laid out — a hidden tab, a viewport mid-resize — measures nothing
+   * worth sizing from. A frame is also when the reader stops seeing the intermediate size.
+   */
+  private scheduleFit(signal?: AbortSignal): void {
+    if (!this.fit) return;
+    cancelAnimationFrame(this.fitFrame);
+    this.fitFrame = requestAnimationFrame(() => {
+      if (signal?.aborted) return;
+      this.applyFit();
+      this.applyGeometry();
+    });
+  }
+
+  /**
+   * Shapes the window around the object instead of the other way round: the content
+   * region is handed the aspect the renderer asked for and the frame grows or shrinks
+   * in height around it. The viewport is the ceiling — when the height runs into it a
+   * renderer that allows narrowing gives up width rather than letterbox its picture.
+   */
+  private applyFit(): void {
+    const fit = this.fit;
+    const dialog = this.elements.dialog;
+    const content = this.elements.content;
+    if (!fit || !dialog.open || this.maximized || this.collapsed) return;
+    // A full-screen viewer has no window to shape, and an inline size would break out of it.
+    if (window.matchMedia(FULLSCREEN_WINDOW).matches) return;
+
+    // Measure from the stylesheet's own size, so repeated fits do not compound.
+    this.clearSize();
+    const baseWidth = dialog.offsetWidth;
+    // The chrome is the title bar, toolbar, footer and the frame around the content pane.
+    const chromeWidth = baseWidth - content.clientWidth;
+    const chromeHeight = dialog.offsetHeight - content.clientHeight;
+    // A hidden or not-yet-laid-out tab measures nothing worth sizing from.
+    if (baseWidth <= 0 || chromeWidth < 0 || chromeHeight < 0 || !(fit.aspect > 0)) return;
+
+    const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - VIEWPORT_INSET);
+    const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - VIEWPORT_INSET);
+    // Everything that is not the region itself: the window's chrome plus whatever the
+    // content lays out around it, both measured at the size the stylesheet just gave back.
+    const region = fit.region;
+    const spentWidth = chromeWidth + (region ? Math.max(0, content.clientWidth - region.offsetWidth) : 0);
+    const spentHeight = chromeHeight + (region ? Math.max(0, content.clientHeight - region.offsetHeight) : 0);
+    let width = Math.min(baseWidth, maxWidth, (fit.maxWidth ?? Infinity) + spentWidth);
+    let height = spentHeight + (width - spentWidth) / fit.aspect;
+    if (height > maxHeight && fit.narrow) {
+      // All the height there is; the region keeps its aspect by taking less width.
+      width = Math.min(width, (maxHeight - spentHeight) * fit.aspect + spentWidth);
+    }
+    height = clamp(height, MIN_HEIGHT, maxHeight);
+    width = clamp(width, MIN_WIDTH, maxWidth);
+    dialog.style.width = `${Math.round(width)}px`;
+    dialog.style.height = `${Math.round(height)}px`;
+    this.fitted = true;
+  }
+
+  private clearSize(): void {
+    this.elements.dialog.style.width = "";
+    this.elements.dialog.style.height = "";
+    this.fitted = false;
+  }
+
+  /**
    * Writes the drag offset back as a transform, first pulling it into range.
    * The untransformed position is derived rather than measured because the open
    * animation also writes a transform, which would poison a live rect reading.
@@ -289,7 +378,9 @@ export class FileViewer {
       const width = Math.min(dialog.offsetWidth, Math.max(MIN_WIDTH, window.innerWidth - VIEWPORT_INSET));
       const height = Math.min(dialog.offsetHeight, Math.max(MIN_HEIGHT, window.innerHeight - VIEWPORT_INSET));
       if (dialog.style.width) dialog.style.width = `${width}px`;
-      if (dialog.style.height) dialog.style.height = `${height}px`;
+      // A collapsed window measures the shade, not the window; writing that back as the
+      // inline height would roll the frame up for good the moment it is expanded again.
+      if (dialog.style.height && !this.collapsed) dialog.style.height = `${height}px`;
       const baseLeft = (window.innerWidth - width) / 2;
       const baseTop = (window.innerHeight - height) / 2;
       this.offsetX = clamp(this.offsetX, DRAG_MARGIN - width - baseLeft, window.innerWidth - DRAG_MARGIN - baseLeft);
