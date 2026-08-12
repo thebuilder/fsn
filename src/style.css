@@ -94,6 +94,12 @@
    * back. Following the backdrop in costs a beat and means it only ever rises.
    */
   :root[data-welcome="held"] #app { transition-delay: 300ms; }
+  /**
+   * An entrance owed is an entrance not yet spent, so whatever is holding its animation
+   * holds its visibility with it. Drawn behind the screen and then animated on dismissal,
+   * the heading reads as the same words arriving twice — the second time as a reset.
+   */
+  :root[data-welcome="held"] :is(.scene-title, .breadcrumbs) { visibility: hidden; }
   .scene-switching #world { filter: brightness(1.55) saturate(0.7); opacity: 0.7; }
 
   .skip-link {
