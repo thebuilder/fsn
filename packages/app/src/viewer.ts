@@ -1,9 +1,9 @@
-import { browserResourceUrl, formatBytes, readBrowserResource, type FsNode } from "./filesystem";
+import { formatBytes, type FsNode } from "@fsn/core";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
 import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost, WindowFit } from "./viewers/types";
 
-type ViewerElements = {
+export type ViewerElements = {
   dialog: HTMLDialogElement;
   titlebar: HTMLElement;
   title: HTMLElement;
@@ -17,6 +17,14 @@ type ViewerElements = {
   collapse: HTMLButtonElement;
   grow: HTMLButtonElement;
   close: HTMLButtonElement;
+};
+
+/** Host-owned file operations keep the shared viewer independent from its runtime. */
+export type ViewerIO = {
+  read(node: FsNode, signal: AbortSignal): Promise<Blob>;
+  directUrl(node: FsNode): string | null;
+  openNative?: (node: FsNode) => Promise<void>;
+  writeText?: (node: FsNode, value: string) => Promise<void>;
 };
 
 /** The inline size a zoomed window returns to, plus the drag offset it had. */
@@ -57,7 +65,10 @@ export class FileViewer {
   private fitted = false;
   private fitFrame = 0;
 
-  constructor(private readonly elements: ViewerElements) {
+  constructor(
+    private readonly elements: ViewerElements,
+    private readonly io: ViewerIO,
+  ) {
     elements.close.addEventListener("click", () => elements.dialog.close());
     // `close` is delivered asynchronously, so a dialog that has already been reopened
     // for the next object would otherwise be torn down by the previous one's event.
@@ -141,7 +152,7 @@ export class FileViewer {
         return source.text();
       },
       url: async () => {
-        const direct = browserResourceUrl(node);
+        const direct = this.io.directUrl(node);
         if (direct) return direct;
         const url = URL.createObjectURL(await blob());
         this.objectUrls.push(url);
@@ -170,9 +181,9 @@ export class FileViewer {
     };
   }
 
-  /** Local files, demo assets and inline demo text all reduce to one blob. */
+  /** Platform files, demo assets and inline demo text all reduce to one blob. */
   private async readPayload(node: FsNode, signal: AbortSignal): Promise<Blob> {
-    return readBrowserResource(node, signal);
+    return this.io.read(node, signal);
   }
 
   private addToggle(spec: ToggleSpec, signal: AbortSignal): void {

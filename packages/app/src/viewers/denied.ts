@@ -1,4 +1,4 @@
-import { hasBytes } from "../filesystem";
+import { hasBytes } from "@fsn/core";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
 

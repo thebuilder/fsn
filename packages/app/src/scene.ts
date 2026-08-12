@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { categoryOf, type FileCategory, type FsNode } from "./filesystem";
+import { categoryOf, type FileCategory, type FsNode } from "@fsn/core";
 
 type SceneCallbacks = {
   onSelect: (node: FsNode | null) => void;

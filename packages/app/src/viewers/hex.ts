@@ -1,4 +1,4 @@
-import { formatBytes } from "../filesystem";
+import { formatBytes } from "@fsn/core";
 import { hexLines } from "@fsn/core/parsers/binary";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";

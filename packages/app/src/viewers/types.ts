@@ -1,4 +1,4 @@
-import type { FsNode } from "../filesystem";
+import type { FsNode } from "@fsn/core";
 
 export type ToggleSpec = {
   /** Rendered on the button, so it can carry the state: `PIXEL FILTER: ON`. */

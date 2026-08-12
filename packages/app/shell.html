@@ -1,0 +1,248 @@
+<a class="skip-link" href="#controls">Skip to navigator controls</a>
+<main id="app">
+  <canvas id="world" tabindex="0" aria-label="Interactive 3D view of the current directory. Aim with the center reticle, press E to select, or Enter to open the targeted object."></canvas>
+
+  <header class="topbar">
+    <a class="brand" id="brand-home" href="#" aria-label="Return to the root directory">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>FSN</strong><small>File System Navigator</small></span>
+    </a>
+    <nav class="breadcrumbs" aria-label="Current directory" id="breadcrumbs"></nav>
+    <div class="top-actions">
+      <button class="icon-button" id="search-button" type="button" aria-label="Search files" title="Search (⌘K)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+      </button>
+      <button class="button button-secondary" id="demo-button" type="button">Demo world</button>
+      <button class="button button-primary" id="folder-button" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5H3z"/></svg>
+        <span id="folder-button-label">Open folder</span>
+      </button>
+      <input id="folder-fallback" class="visually-hidden" type="file" webkitdirectory multiple aria-label="Choose a local folder" />
+    </div>
+    <div class="loading-bar" role="progressbar" aria-label="Reading filesystem"><i></i></div>
+  </header>
+
+  <section class="scene-title" id="scene-title" aria-live="polite">
+    <p class="eyebrow" id="source-label">DEMO FILESYSTEM</p>
+    <h1 id="directory-title">Macintosh HD</h1>
+    <p id="directory-summary">0 objects</p>
+  </section>
+
+  <aside class="details-panel" id="details-panel" aria-labelledby="details-title">
+    <div class="panel-accent"></div>
+    <div class="details-heading">
+      <span class="file-glyph" id="details-glyph" aria-hidden="true"></span>
+      <div>
+        <p class="eyebrow" id="details-kind">NO SELECTION</p>
+        <h2 id="details-title">Select an object</h2>
+      </div>
+    </div>
+    <dl id="details-list">
+      <div><dt>Path</dt><dd>-</dd></div>
+      <div><dt>Size</dt><dd>-</dd></div>
+      <div><dt>Modified</dt><dd>-</dd></div>
+    </dl>
+    <button class="button button-primary enter-button" id="enter-button" type="button" hidden>Enter directory <span aria-hidden="true">↗</span></button>
+  </aside>
+
+  <section class="legend" aria-label="File type legend">
+    <p class="eyebrow">OBJECT TYPES</p>
+    <ul>
+      <li><i class="swatch swatch-directory"></i>Directory</li>
+      <li><i class="swatch swatch-code"></i>Code</li>
+      <li><i class="swatch swatch-media"></i>Media</li>
+      <li><i class="swatch swatch-document"></i>Document</li>
+      <li><i class="swatch swatch-archive"></i>Archive</li>
+    </ul>
+  </section>
+
+  <!-- Only the bindings nobody would guess: how to move, and that Alt trades the two
+       clusters. Aiming, opening and stepping back are conventions this world shares
+       with every other window on the machine, so they live in the manual behind the
+       last control — which is also the one thing on this strip a finger can use. -->
+  <section class="controls" id="controls" aria-label="3D navigation controls" tabindex="-1">
+    <p><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
+    <p><kbd>↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
+    <p><kbd>Shift</kbd> Boost</p>
+    <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd aria-hidden="true">?</kbd> All controls</button>
+  </section>
+
+  <div class="reticle" id="reticle" aria-hidden="true"><i></i><span>NO TARGET</span></div>
+  <div class="hover-label" id="hover-label" hidden></div>
+  <div class="status" id="status" role="status" aria-live="polite"><i></i><span>Demo filesystem online</span></div>
+</main>
+
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <form method="dialog">
+    <div class="search-header">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+      <label class="visually-hidden" for="search-input" id="search-title">Search files</label>
+      <input id="search-input" type="search" placeholder="Search this directory and below…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
+      <button class="key-button" type="submit" aria-label="Close search">ESC</button>
+    </div>
+    <div class="search-scope">
+      <div class="scope-switch" id="scope-switch" role="group" aria-label="Search scope">
+        <button class="scope-button" id="scope-current" type="button" aria-pressed="true">This directory</button>
+        <button class="scope-button" id="scope-all" type="button" aria-pressed="false">Everywhere</button>
+      </div>
+      <p class="search-count" id="search-count" aria-live="polite"></p>
+    </div>
+    <ul class="search-results" id="search-results" role="listbox" aria-label="Search results"></ul>
+  </form>
+</dialog>
+
+<!--
+  The manual, printed by the machine it documents. Every binding lives here, mouse,
+  keyboard and touch alike, so the strip on screen can stay down to the handful that
+  are not guessable and this can hold the rest without competing for the view.
+-->
+<dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
+  <form method="dialog">
+    <header class="help-header">
+      <h2 class="eyebrow" id="help-title">FSN(1) · CONTROL REFERENCE</h2>
+      <button class="key-button" type="submit" aria-label="Close controls">ESC</button>
+    </header>
+    <!-- Focusable because it scrolls: a pane a mouse can reach a keyboard must too. -->
+    <div class="help-screen" tabindex="0">
+      <p class="help-command"><span aria-hidden="true">fsn:/ $</span> man controls</p>
+
+      <section class="help-block">
+        <h3>Mouse</h3>
+        <dl>
+          <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
+          <div><dt><kbd>Right-drag</kbd></dt><dd>Pan the view</dd></div>
+          <div><dt><kbd>Scroll</kbd></dt><dd>Dolly in and out</dd></div>
+          <div><dt><kbd>Click</kbd></dt><dd>Select an object</dd></div>
+          <div><dt><kbd>Double click</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
+        </dl>
+      </section>
+
+      <section class="help-block">
+        <h3>Flight</h3>
+        <dl>
+          <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Fly forward, left, back, right</dd></div>
+          <div><dt><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd>Turn — swing the view up, left, down, right</dd></div>
+          <div><dt><kbd>Alt</kbd></dt><dd>Hold to trade the two clusters: W A S D turns and the arrows fly. The strip at the foot of the screen says which is which</dd></div>
+          <div><dt><kbd>R</kbd><kbd>F</kbd></dt><dd>Rise and descend</dd></div>
+          <div><dt><kbd>Shift</kbd></dt><dd>Hold alongside any of these to fly and turn faster</dd></div>
+          <div><dt><kbd>Home</kbd></dt><dd>Recentre on the directory you are in</dd></div>
+        </dl>
+      </section>
+
+      <section class="help-block">
+        <h3>Objects</h3>
+        <dl>
+          <div><dt><kbd>E</kbd></dt><dd>Target whatever the centre reticle is on</dd></div>
+          <div><dt><kbd>Enter</kbd></dt><dd>Open the target — enter a directory, or read a file</dd></div>
+          <div><dt><kbd>Esc</kbd><kbd>Backspace</kbd></dt><dd>Go back to the parent directory</dd></div>
+          <div><dt><kbd>⌘K</kbd><kbd>Ctrl K</kbd><kbd>/</kbd></dt><dd>Search the file system</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>Show this page</dd></div>
+        </dl>
+      </section>
+
+      <section class="help-block">
+        <h3>Touch</h3>
+        <dl>
+          <div><dt><kbd>Tap</kbd></dt><dd>Select an object</dd></div>
+          <div><dt><kbd>Double tap</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
+          <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
+          <div><dt><kbd>Pinch</kbd></dt><dd>Zoom; two fingers dragged together pan</dd></div>
+        </dl>
+      </section>
+
+      <p class="help-command help-end"><span aria-hidden="true">fsn:/ $</span></p>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="welcome-dialog" id="welcome-dialog" aria-labelledby="welcome-title">
+  <div class="welcome-visual" aria-hidden="true">
+    <svg class="welcome-art" viewBox="0 0 420 300" role="img" aria-label="Three clusters of isometric columns, one per directory, standing on a grid" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <radialGradient id="welcome-halo" gradientUnits="userSpaceOnUse" cx="210" cy="180" r="180"
+          gradientTransform="translate(210 180) scale(1 .66) translate(-210 -180)">
+          <stop offset="0%" stop-color="#64ffd8" stop-opacity=".22"/>
+          <stop offset="100%" stop-color="#64ffd8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="welcome-floor-fade" gradientUnits="userSpaceOnUse" cx="210" cy="170" r="290"
+          gradientTransform="translate(210 170) scale(1 .56) translate(-210 -170)">
+          <stop offset="0%" stop-color="#fff" stop-opacity="1"/>
+          <stop offset="42%" stop-color="#fff" stop-opacity=".8"/>
+          <stop offset="74%" stop-color="#fff" stop-opacity=".3"/>
+          <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+        </radialGradient>
+        <mask id="welcome-floor-mask">
+          <rect width="420" height="300" fill="url(#welcome-floor-fade)"/>
+        </mask>
+        <pattern id="welcome-grid-minor" patternUnits="userSpaceOnUse" x="42" y="27" width="56" height="28">
+          <!-- 1.4 units: the panel renders this viewBox at ~0.66, so a 1-unit
+               stroke would land sub-pixel and wash out. -->
+          <path d="M0 0 L56 28 M0 28 L56 0" fill="none" stroke="#5bffd9" stroke-opacity=".3" stroke-width="1.4"/>
+        </pattern>
+        <pattern id="welcome-grid-major" patternUnits="userSpaceOnUse" x="210" y="139" width="280" height="140">
+          <!-- 1.4 units: the panel renders this viewBox at ~0.66, so a 1-unit
+               stroke would land sub-pixel and wash out. -->
+          <path d="M0 0 L280 140 M0 140 L280 0" fill="none" stroke="#5bffd9" stroke-opacity=".48" stroke-width="1.4"/>
+        </pattern>
+      </defs>
+      <circle class="welcome-halo" cx="210" cy="180" r="180" fill="url(#welcome-halo)"/>
+      <g class="welcome-floor" mask="url(#welcome-floor-mask)">
+        <rect width="420" height="300" fill="url(#welcome-grid-minor)"/>
+        <rect width="420" height="300" fill="url(#welcome-grid-major)"/>
+      </g>
+      <!-- One group per column, ordered back to front: the reveal staggers down this
+           list, so the skyline builds away from the horizon rather than at random. -->
+      <g class="welcome-skyline">
+        <g class="welcome-column"><polygon points="187,49 210,60.5 210,178.5 187,167" fill="#358378"/><polygon points="210,60.5 233,49 233,167 210,178.5" fill="#23564f"/><polygon points="210,37.5 233,49 210,60.5 187,49" fill="#5ce1cf"/></g>
+        <g class="welcome-column"><polygon points="215,95 238,106.5 238,192.5 215,181" fill="#358378"/><polygon points="238,106.5 261,95 261,181 238,192.5" fill="#23564f"/><polygon points="238,83.5 261,95 238,106.5 215,95" fill="#5ce1cf"/></g>
+        <g class="welcome-column"><polygon points="159,87 182,98.5 182,192.5 159,181" fill="#516f94"/><polygon points="182,98.5 205,87 205,181 182,192.5" fill="#354961"/><polygon points="182,75.5 205,87 182,98.5 159,87" fill="#8bbfff"/></g>
+        <g class="welcome-column"><polygon points="187,131 210,142.5 210,206.5 187,195" fill="#358378"/><polygon points="210,142.5 233,131 233,195 210,206.5" fill="#23564f"/><polygon points="210,119.5 233,131 210,142.5 187,131" fill="#5ce1cf"/></g>
+        <g class="welcome-column"><polygon points="327,137 350,148.5 350,248.5 327,237" fill="#8c3149"/><polygon points="350,148.5 373,137 373,237 350,248.5" fill="#5c2030"/><polygon points="350,125.5 373,137 350,148.5 327,137" fill="#f2557e"/></g>
+        <g class="welcome-column"><polygon points="47,141 70,152.5 70,248.5 47,237" fill="#94570d"/><polygon points="70,152.5 93,141 93,237 70,248.5" fill="#613909"/><polygon points="70,129.5 93,141 70,152.5 47,141" fill="#ff9617"/></g>
+        <g class="welcome-column"><polygon points="355,179 378,190.5 378,262.5 355,251" fill="#8c3149"/><polygon points="378,190.5 401,179 401,251 378,262.5" fill="#5c2030"/><polygon points="378,167.5 401,179 378,190.5 355,179" fill="#f2557e"/></g>
+        <g class="welcome-column"><polygon points="299,171 322,182.5 322,262.5 299,251" fill="#8c3149"/><polygon points="322,182.5 345,171 345,251 322,262.5" fill="#5c2030"/><polygon points="322,159.5 345,171 322,182.5 299,171" fill="#f2557e"/></g>
+        <g class="welcome-column"><polygon points="75,183 98,194.5 98,262.5 75,251" fill="#94570d"/><polygon points="98,194.5 121,183 121,251 98,262.5" fill="#613909"/><polygon points="98,171.5 121,183 98,194.5 75,183" fill="#ff9617"/></g>
+        <g class="welcome-column"><polygon points="19,175 42,186.5 42,262.5 19,251" fill="#85813f"/><polygon points="42,186.5 65,175 65,251 42,262.5" fill="#575429"/><polygon points="42,163.5 65,175 42,186.5 19,175" fill="#e6de6d"/></g>
+      </g>
+    </svg>
+  </div>
+  <div class="welcome-copy">
+    <p class="eyebrow">SYSTEM READY</p>
+    <h2 id="welcome-title"><span>Enter the</span> <span>file system.</span></h2>
+    <p>Fly through a generated file system now, or open a folder from your computer. Everything stays in this browser.</p>
+    <div class="welcome-actions">
+      <button class="button button-primary" id="welcome-demo" type="button">Explore demo</button>
+      <button class="button button-secondary" id="welcome-folder" type="button">Open local folder</button>
+    </div>
+    <small>Read-only. No files are uploaded.</small>
+  </div>
+</dialog>
+
+<dialog class="file-viewer" id="file-viewer" aria-labelledby="viewer-title">
+  <div class="viewer-window">
+    <header class="viewer-titlebar" id="viewer-titlebar">
+      <div class="traffic-lights">
+        <button class="light light-close" id="viewer-close" type="button" title="Close" aria-label="Close window"><i aria-hidden="true">×</i></button>
+        <button class="light light-collapse" id="viewer-collapse" type="button" title="Collapse" aria-pressed="false" aria-label="Collapse window"><i aria-hidden="true">–</i></button>
+        <button class="light light-zoom" id="viewer-zoom" type="button" title="Maximize" aria-pressed="false" aria-label="Maximize window"><i aria-hidden="true">+</i></button>
+      </div>
+      <div class="viewer-title-wrap">
+        <span id="viewer-mode">OBJECT VIEWER</span>
+        <h2 id="viewer-title">Untitled</h2>
+      </div>
+    </header>
+    <div class="viewer-toolbar">
+      <span id="viewer-path">/</span>
+      <div>
+        <div class="viewer-tools" id="viewer-tools"></div>
+        <span id="viewer-size">0 KB</span>
+      </div>
+    </div>
+    <div class="viewer-content" id="viewer-content" tabindex="-1"></div>
+    <footer class="viewer-footer">
+      <span><i class="viewer-led"></i> LOCAL READ-ONLY CHANNEL</span>
+      <span id="viewer-position">READY</span>
+    </footer>
+    <button class="viewer-grow" id="viewer-grow" type="button" aria-label="Resize window (drag, or use the arrow keys)"></button>
+  </div>
+</dialog>

@@ -1,4 +1,4 @@
-import { canReadAsText, categoryOf, extensionOf, hasBytes, type FsNode } from "../filesystem";
+import { canReadAsText, categoryOf, extensionOf, hasBytes, type FsNode } from "@fsn/core";
 import type { Renderer, RendererId } from "./types";
 
 type Entry = {

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { extensionOf } from "../filesystem";
+import { extensionOf } from "@fsn/core";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
 

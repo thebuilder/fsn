@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { sharedNavigatorShell } from "../../packages/app/vite-plugin.mjs";
 
 /**
  * Link scrapers do not resolve relative URLs, so the canonical and Open Graph tags
@@ -24,6 +25,7 @@ export default defineConfig(() => {
     // rather than Vite quietly picking the next one up from 5173.
     server: { port: Number(process.env.PORT) || 5173 },
     plugins: [
+      sharedNavigatorShell(),
       {
         name: "fsn-site-url",
         transformIndexHtml: {

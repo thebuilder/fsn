@@ -1,4 +1,6 @@
 import { inject } from "@vercel/analytics";
+import { FileViewer, WorldScene, type NavigationDirection } from "@fsn/app";
+import "@fsn/app/style.css";
 import { createDemoFilesystem } from "./demo";
 import {
   categoryOf,
@@ -11,6 +13,8 @@ import {
   pathFor,
   rootFromDirectoryHandle,
   rootFromFileList,
+  browserResourceUrl,
+  readBrowserResource,
   searchFilesystem,
   sortNodes,
   type FilesystemRoot,
@@ -19,8 +23,6 @@ import {
   type SearchOutcome,
 } from "./filesystem";
 import { directoryPermission, forgetSource, recallSource, rememberSource } from "./recent";
-import { WorldScene, type NavigationDirection } from "./scene";
-import { FileViewer } from "./viewer";
 
 /**
  * Vercel Web Analytics. Runs once, client-side, before anything else mounts.
@@ -70,21 +72,27 @@ const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
 const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
 
-const viewer = new FileViewer({
-  dialog: getElement<HTMLDialogElement>("file-viewer"),
-  titlebar: getElement("viewer-titlebar"),
-  title: getElement("viewer-title"),
-  mode: getElement("viewer-mode"),
-  path: getElement("viewer-path"),
-  size: getElement("viewer-size"),
-  content: getElement("viewer-content"),
-  position: getElement("viewer-position"),
-  tools: getElement("viewer-tools"),
-  zoom: getElement<HTMLButtonElement>("viewer-zoom"),
-  collapse: getElement<HTMLButtonElement>("viewer-collapse"),
-  grow: getElement<HTMLButtonElement>("viewer-grow"),
-  close: getElement<HTMLButtonElement>("viewer-close"),
-});
+const viewer = new FileViewer(
+  {
+    dialog: getElement<HTMLDialogElement>("file-viewer"),
+    titlebar: getElement("viewer-titlebar"),
+    title: getElement("viewer-title"),
+    mode: getElement("viewer-mode"),
+    path: getElement("viewer-path"),
+    size: getElement("viewer-size"),
+    content: getElement("viewer-content"),
+    position: getElement("viewer-position"),
+    tools: getElement("viewer-tools"),
+    zoom: getElement<HTMLButtonElement>("viewer-zoom"),
+    collapse: getElement<HTMLButtonElement>("viewer-collapse"),
+    grow: getElement<HTMLButtonElement>("viewer-grow"),
+    close: getElement<HTMLButtonElement>("viewer-close"),
+  },
+  {
+    read: readBrowserResource,
+    directUrl: browserResourceUrl,
+  },
+);
 
 let filesystem: FilesystemRoot = createDemoFilesystem();
 let ancestry: FsNode[] = [filesystem.root];

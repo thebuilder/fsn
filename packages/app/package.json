@@ -1,23 +1,28 @@
 {
-  "name": "@fsn/web",
+  "name": "@fsn/app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "sideEffects": [
+    "./src/style.css"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./scene": "./src/scene.ts",
+    "./viewer": "./src/viewer.ts",
+    "./style.css": "./src/style.css"
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@fsn/app": "workspace:*",
     "@fsn/core": "workspace:*",
-    "@vercel/analytics": "^2.0.1"
+    "three": "^0.179.1"
   },
   "devDependencies": {
+    "@types/three": "^0.179.0",
     "typescript": "^5.9.2",
-    "vite": "^7.1.2",
     "vitest": "^3.2.4"
   }
 }

@@ -1,4 +1,4 @@
-import { categoryOf } from "../filesystem";
+import { categoryOf } from "@fsn/core";
 import { createAudioAnalyser } from "./audio-analyser";
 import { el } from "./dom";
 import { bindTransportKeys, createTransport } from "./transport";

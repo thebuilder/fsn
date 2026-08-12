@@ -1,4 +1,4 @@
-import { formatBytes, formatDate } from "../filesystem";
+import { formatBytes, formatDate } from "@fsn/core";
 import { readZipDirectory, type ZipEntry } from "@fsn/core/parsers/zip";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
