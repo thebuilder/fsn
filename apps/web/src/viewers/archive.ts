@@ -1,5 +1,5 @@
 import { formatBytes, formatDate } from "../filesystem";
-import { readZipDirectory, type ZipEntry } from "../parsers/zip";
+import { readZipDirectory, type ZipEntry } from "@fsn/core/parsers/zip";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
 

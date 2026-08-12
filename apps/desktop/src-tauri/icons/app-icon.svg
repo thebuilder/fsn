@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="FSN">
+  <rect width="64" height="64" rx="10" fill="#05090a"/>
+  <g transform="rotate(-8 32 32)" fill="#86fadd" fill-opacity="0.06" stroke="#86fadd" stroke-width="2.75" stroke-linejoin="miter">
+    <path d="M12 10h20v40H12z"/>
+    <path d="M21 15h20v40H21z" opacity="0.68"/>
+    <path d="M30 20h20v40H30z" opacity="0.38"/>
+  </g>
+</svg>

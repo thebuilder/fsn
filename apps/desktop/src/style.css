@@ -1,0 +1,24 @@
+:root {
+  color: #dffef6;
+  background: #05090a;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: dark;
+}
+
+body {
+  display: grid;
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  place-items: center;
+}
+
+section {
+  max-width: 32rem;
+  padding: 2rem;
+}
+
+p:first-child {
+  color: #86fadd;
+  letter-spacing: 0.18em;
+}

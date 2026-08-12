@@ -1,4 +1,4 @@
-import { delimiterFor, parseDelimited, type Sheet } from "../parsers/delimited";
+import { delimiterFor, parseDelimited, type Sheet } from "@fsn/core/parsers/delimited";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
 

@@ -1,231 +1,74 @@
-export type FsKind = "file" | "directory";
+import {
+  DIRECTORY_PEEK_LIMIT,
+  categoryOf,
+  sortNodes,
+  type DirectoryPeek,
+  type FilesystemRoot,
+  type FsNode,
+  type FsResource,
+} from "@fsn/core";
 
-export type FileCategory =
-  | "directory"
-  | "code"
-  | "image"
-  | "audio"
-  | "video"
-  | "document"
-  | "archive"
-  | "model"
-  | "font"
-  | "system"
-  | "unknown";
-
-export type FsNode = {
-  id: string;
-  parentId: string | null;
-  name: string;
-  kind: FsKind;
-  size?: number;
-  modified?: number;
-  children?: FsNode[];
-  file?: File;
-  handle?: FileSystemHandle;
-  demoContent?: string;
-  /** Public URL for a demo file that has real bytes on disk (images, models, audio). */
-  demoAsset?: string;
-  /** Attribution for a licensed demo asset. Shown by the viewer that opens it. */
-  demoCredit?: { text: string; href?: string };
-  /** Cheap listing used to size and preview this directory from the outside. */
-  peek?: DirectoryPeek;
-};
-
-/** What a directory looks like from the outside: how much it holds, and of what kinds. */
-export type DirectoryPeek = {
-  total: number;
-  /** Category per child, in listing order, capped at `PEEK_LIMIT`. */
-  categories: FileCategory[];
-};
-
-/** No preview draws more markers than this, so there is nothing to gain by reading further. */
-const PEEK_LIMIT = 64;
-
-export type FilesystemRoot = {
-  root: FsNode;
-  sourceLabel: string;
-  isLocal: boolean;
-};
-
-const codeExtensions = new Set([
-  "astro", "bash", "bat", "c", "cfg", "cjs", "clj", "cljs", "cmd", "conf", "cpp", "cs", "css", "cts", "dart", "diff", "elm", "erl", "ex", "exs", "fish", "fs", "go", "gql", "gradle", "graphql", "groovy", "h", "hcl", "hpp", "hs", "html", "ini", "java", "jl", "js", "json", "json5", "jsonc", "jsx", "kt", "kts", "less", "lua", "mjs", "mts", "mdx", "nim", "patch", "php", "pl", "properties", "proto", "ps1", "py", "r", "rb", "rs", "sass", "scala", "scss", "sh", "sql", "styl", "svelte", "swift", "tf", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml", "zig", "zsh",
-]);
-const imageExtensions = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"]);
-const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
-const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "ogv", "webm"]);
-const documentExtensions = new Set(["csv", "doc", "docx", "log", "md", "nfo", "pdf", "rtf", "text", "tsv", "txt"]);
-const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "jar", "rar", "tar", "tgz", "zip"]);
-const modelExtensions = new Set(["glb", "gltf", "obj", "ply", "stl"]);
-const fontExtensions = new Set(["otf", "ttf", "woff", "woff2"]);
-const systemExtensions = new Set(["app", "bin", "dat", "dll", "dylib", "exe", "pkg", "so"]);
-const textExtensions = new Set([...codeExtensions, "csv", "log", "md", "nfo", "rtf", "text", "tsv", "txt"]);
-
-/**
- * Files whose type lives in the name rather than an extension. Without these, an
- * everyday repository is mostly ACCESS DENIED screens: Makefile, LICENSE and every
- * dotfile fall through `extensionOf` with nothing to classify.
- */
-const namedFiles = new Map<string, FileCategory>([
-  ...["makefile", "dockerfile", "containerfile", "justfile", "rakefile", "gemfile", "podfile", "procfile", "brewfile", "vagrantfile", "jenkinsfile"].map((name) => [name, "code"] as const),
-  ...[".babelrc", ".browserslistrc", ".dockerignore", ".editorconfig", ".env", ".eslintrc", ".gitattributes", ".gitignore", ".gitmodules", ".htaccess", ".npmrc", ".nvmrc", ".prettierrc", ".yarnrc"].map((name) => [name, "code"] as const),
-  ...["authors", "changelog", "changes", "codeowners", "contributing", "contributors", "copying", "install", "license", "licence", "news", "notice", "readme", "todo", "version"].map((name) => [name, "document"] as const),
-]);
-
-export function extensionOf(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
-}
-
-/** Classifies files that carry no usable extension, including scoped dotfiles like `.env.local`. */
-function namedCategory(name: string): FileCategory | undefined {
-  const lower = name.toLowerCase();
-  const direct = namedFiles.get(lower);
-  if (direct) return direct;
-  if (!lower.startsWith(".")) return undefined;
-  const scope = lower.indexOf(".", 1);
-  return scope > 0 ? namedFiles.get(lower.slice(0, scope)) : undefined;
-}
-
-export function categoryOf(node: FsNode): FileCategory {
-  if (node.kind === "directory") return "directory";
-  const extension = extensionOf(node.name);
-  if (codeExtensions.has(extension)) return "code";
-  if (imageExtensions.has(extension)) return "image";
-  if (audioExtensions.has(extension)) return "audio";
-  if (videoExtensions.has(extension)) return "video";
-  if (documentExtensions.has(extension)) return "document";
-  if (archiveExtensions.has(extension)) return "archive";
-  if (modelExtensions.has(extension)) return "model";
-  if (fontExtensions.has(extension)) return "font";
-  if (systemExtensions.has(extension)) return "system";
-  return namedCategory(node.name) ?? "unknown";
-}
-
-/**
- * Whether anything can actually be read from the node. Demo entries that exist only
- * as metadata answer false, so no viewer is asked to decode an object with no bytes.
- */
-export function hasBytes(node: FsNode): boolean {
-  return node.kind === "file" && (Boolean(node.file) || Boolean(node.demoAsset) || node.demoContent !== undefined);
-}
-
-export function canReadAsText(node: FsNode): boolean {
-  if (node.kind !== "file") return false;
-  const extension = extensionOf(node.name);
-  return extension ? textExtensions.has(extension) : namedCategory(node.name) !== undefined;
-}
-
-export function formatBytes(bytes?: number): string {
-  if (bytes === undefined) return "-";
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / 1024 ** exponent;
-  return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
-}
-
-export function formatDate(timestamp?: number): string {
-  if (!timestamp) return "-";
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-  }).format(timestamp);
-}
-
-export function sortNodes(nodes: FsNode[]): FsNode[] {
-  return [...nodes].sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
-    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-  });
-}
-
-export type SearchMatch = {
-  node: FsNode;
-  /** Directory chain from the filesystem root down to the match's parent. */
-  trail: FsNode[];
-};
-
-export type SearchOutcome = {
-  matches: SearchMatch[];
-  /** Every match found, including the ones trimmed off by the limit. */
-  total: number;
-  /** Directories that exist but have not been read from disk yet, so their contents are invisible. */
-  unreadDirectories: number;
-  /** False when the walk hit its ceiling, so the counts above are lower bounds. */
-  complete: boolean;
-};
-
-/** Ceiling on how many nodes a single query may walk, so a huge tree cannot freeze the frame. */
-const searchVisitLimit = 20000;
-/** Candidates kept for ranking; anything past this is counted but never shown. */
-const searchCandidateLimit = 200;
-
-/**
- * Walks the whole subtree under `base` (an ancestry chain ending at the directory to
- * search), breadth-first so shallow matches are found first. It only descends into
- * directories already read into memory; searching never triggers new disk access.
- */
-export function searchFilesystem(
-  base: FsNode[],
-  query: string,
-  options: { limit: number },
-): SearchOutcome {
-  const normalized = query.trim().toLowerCase();
-  const candidates: SearchMatch[] = [];
-  const queue: FsNode[][] = [base];
-  let total = 0;
-  let unreadDirectories = 0;
-  let visited = 0;
-  let complete = true;
-
-  while (queue.length) {
-    const trail = queue.shift() as FsNode[];
-    const children = sortNodes(trail[trail.length - 1].children ?? []);
-    for (const node of children) {
-      visited += 1;
-      if (visited > searchVisitLimit) {
-        complete = false;
-        queue.length = 0;
-        break;
-      }
-      if (!normalized || node.name.toLowerCase().includes(normalized)) {
-        total += 1;
-        if (candidates.length < searchCandidateLimit) candidates.push({ node, trail });
-      }
-      if (node.kind !== "directory") continue;
-      if (node.children) queue.push([...trail, node]);
-      else unreadDirectories += 1;
-    }
-  }
-
-  candidates.sort((a, b) => {
-    const rank = matchRank(a.node.name, normalized) - matchRank(b.node.name, normalized);
-    if (rank !== 0) return rank;
-    if (a.trail.length !== b.trail.length) return a.trail.length - b.trail.length;
-    if (a.node.kind !== b.node.kind) return a.node.kind === "directory" ? -1 : 1;
-    return a.node.name.localeCompare(b.node.name, undefined, { numeric: true, sensitivity: "base" });
-  });
-
-  return { matches: candidates.slice(0, options.limit), total, unreadDirectories, complete };
-}
-
-/** Name matches sort ahead of the rest: whole prefix, then word start, then anywhere. */
-function matchRank(name: string, query: string): number {
-  if (!query) return 2;
-  const index = name.toLowerCase().indexOf(query);
-  if (index === 0) return 0;
-  return index > 0 && /[\s._\-/]/.test(name[index - 1]) ? 1 : 2;
-}
-
-export function pathFor(node: FsNode, ancestry: FsNode[]): string {
-  const index = ancestry.findIndex((ancestor) => ancestor.id === node.parentId);
-  const base = index >= 0 ? ancestry.slice(0, index + 1).map((part) => part.name) : ancestry.map((part) => part.name);
-  return `/${[...base, node.name].join("/")}`;
-}
+export * from "@fsn/core";
 
 type DirectoryHandleWithEntries = FileSystemDirectoryHandle & {
   entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
 };
+
+type BrowserResource =
+  | { kind: "directory"; handle: FileSystemDirectoryHandle }
+  | { kind: "file-handle"; handle: FileSystemFileHandle }
+  | { kind: "file"; file: File }
+  | { kind: "text"; content: string }
+  | { kind: "url"; url: string };
+
+/** Browser objects live here rather than in the platform-neutral filesystem tree. */
+const browserResources = new Map<string, BrowserResource>();
+
+function registerResource(id: string, resource: BrowserResource, readable: boolean): FsResource {
+  browserResources.set(id, resource);
+  return { id, readable };
+}
+
+export function registerBrowserTextResource(id: string, content: string): FsResource {
+  return registerResource(id, { kind: "text", content }, true);
+}
+
+export function registerBrowserUrlResource(id: string, url: string): FsResource {
+  return registerResource(id, { kind: "url", url }, true);
+}
+
+/** Returns a URL that is already browser-addressable, avoiding an unnecessary fetch/blob round trip. */
+export function browserResourceUrl(node: FsNode): string | null {
+  if (!node.resource?.readable) return null;
+  const resource = browserResources.get(node.resource.id);
+  return resource?.kind === "url" ? resource.url : null;
+}
+
+/** Resolves the opaque core reference only inside the browser adapter. */
+export async function readBrowserResource(node: FsNode, signal?: AbortSignal): Promise<Blob> {
+  if (node.kind !== "file" || !node.resource?.readable) {
+    throw new Error("This object has no readable bytes in the current session.");
+  }
+  signal?.throwIfAborted();
+  const resource = browserResources.get(node.resource.id);
+  if (!resource) throw new Error("This object's browser resource is no longer available.");
+
+  if (resource.kind === "file") return resource.file;
+  if (resource.kind === "file-handle") return resource.handle.getFile();
+  if (resource.kind === "text") return new Blob([resource.content], { type: "text/plain" });
+  if (resource.kind === "url") {
+    const response = await fetch(resource.url, { signal });
+    if (!response.ok) throw new Error(`Demo object unavailable (HTTP ${response.status}).`);
+    return response.blob();
+  }
+  throw new Error("Directories do not expose a byte payload.");
+}
+
+export function directoryHandleFor(node: FsNode): FileSystemDirectoryHandle | null {
+  if (!node.resource) return null;
+  const resource = browserResources.get(node.resource.id);
+  return resource?.kind === "directory" ? resource.handle : null;
+}
 
 export async function openBrowserDirectory(): Promise<FilesystemRoot | null> {
   const pickerWindow = window as Window & {
@@ -241,12 +84,13 @@ export async function openBrowserDirectory(): Promise<FilesystemRoot | null> {
  * proves the directory is still both present and permitted.
  */
 export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<FilesystemRoot> {
+  const id = `local:${encodeURIComponent(handle.name)}`;
   const root: FsNode = {
-    id: `local:${encodeURIComponent(handle.name)}`,
+    id,
     parentId: null,
     name: handle.name,
     kind: "directory",
-    handle,
+    resource: registerResource(id, { kind: "directory", handle }, false),
   };
   root.children = await readHandleChildren(root);
   return { root, sourceLabel: "LOCAL DIRECTORY / READ ONLY", isLocal: true };
@@ -254,7 +98,7 @@ export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle)
 
 export async function ensureChildren(node: FsNode): Promise<FsNode[]> {
   if (node.children) return node.children;
-  if (node.kind !== "directory" || node.handle?.kind !== "directory") return [];
+  if (node.kind !== "directory" || !directoryHandleFor(node)) return [];
   node.children = await readHandleChildren(node);
   return node.children;
 }
@@ -274,19 +118,20 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   if (node.children) {
     node.peek = {
       total: node.children.length,
-      categories: node.children.slice(0, PEEK_LIMIT).map(categoryOf),
+      categories: node.children.slice(0, DIRECTORY_PEEK_LIMIT).map(categoryOf),
     };
     return node.peek;
   }
 
   const peek: DirectoryPeek = { total: 0, categories: [] };
-  if (node.handle?.kind === "directory") {
+  const handle = directoryHandleFor(node);
+  if (handle) {
     try {
-      const directory = node.handle as DirectoryHandleWithEntries;
-      for await (const [name, handle] of directory.entries()) {
+      const directory = handle as DirectoryHandleWithEntries;
+      for await (const [name, childHandle] of directory.entries()) {
         peek.total += 1;
-        if (peek.categories.length < PEEK_LIMIT) {
-          peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: handle.kind }));
+        if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
+          peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
         }
       }
     } catch {
@@ -299,19 +144,28 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
 
 async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
   const children: FsNode[] = [];
-  const directory = parent.handle as DirectoryHandleWithEntries;
-  for await (const [name, handle] of directory.entries()) {
+  const handle = directoryHandleFor(parent);
+  if (!handle) return children;
+  const directory = handle as DirectoryHandleWithEntries;
+  for await (const [name, childHandle] of directory.entries()) {
+    const id = `${parent.id}/${encodeURIComponent(name)}`;
     const node: FsNode = {
-      id: `${parent.id}/${encodeURIComponent(name)}`,
+      id,
       parentId: parent.id,
       name,
-      kind: handle.kind,
-      handle,
+      kind: childHandle.kind,
+      resource: registerResource(
+        id,
+        childHandle.kind === "directory"
+          ? { kind: "directory", handle: childHandle as FileSystemDirectoryHandle }
+          : { kind: "file-handle", handle: childHandle as FileSystemFileHandle },
+        false,
+      ),
     };
-    if (handle.kind === "file") {
+    if (childHandle.kind === "file") {
       try {
-        const file = await (handle as FileSystemFileHandle).getFile();
-        node.file = file;
+        const file = await (childHandle as FileSystemFileHandle).getFile();
+        node.resource = registerResource(id, { kind: "file", file }, true);
         node.size = file.size;
         node.modified = file.lastModified;
       } catch {
@@ -332,7 +186,8 @@ export function rootFromFileList(files: FileList): FilesystemRoot | null {
   const directories = new Map<string, FsNode>([[rootName, root]]);
 
   for (const file of items) {
-    const segments = (file.webkitRelativePath || file.name).split("/");
+    const path = file.webkitRelativePath || file.name;
+    const segments = path.split("/");
     let current = root;
     let currentPath = rootName;
     for (let index = 1; index < segments.length - 1; index += 1) {
@@ -346,14 +201,15 @@ export function rootFromFileList(files: FileList): FilesystemRoot | null {
       }
       current = directory;
     }
+    const id = `import:${encodeURIComponent(path)}`;
     current.children?.push({
-      id: `import:${encodeURIComponent(file.webkitRelativePath || file.name)}`,
+      id,
       parentId: current.id,
       name: file.name,
       kind: "file",
       size: file.size,
       modified: file.lastModified,
-      file,
+      resource: registerResource(id, { kind: "file", file }, true),
     });
   }
   for (const directory of directories.values()) directory.children = sortNodes(directory.children ?? []);

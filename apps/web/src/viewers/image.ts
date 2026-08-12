@@ -1,5 +1,5 @@
 import { extensionOf } from "../filesystem";
-import { isAnimatedImage } from "../parsers/binary";
+import { isAnimatedImage } from "@fsn/core/parsers/binary";
 import { el } from "./dom";
 import type { ViewerHost } from "./types";
 

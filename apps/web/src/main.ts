@@ -2,6 +2,7 @@ import { inject } from "@vercel/analytics";
 import { createDemoFilesystem } from "./demo";
 import {
   categoryOf,
+  directoryHandleFor,
   ensureChildren,
   peekChildren,
   formatBytes,
@@ -396,9 +397,8 @@ async function chooseFolder(): Promise<void> {
     const selected = await openBrowserDirectory();
     if (selected) {
       setFilesystem(selected);
-      if (selected.root.handle?.kind === "directory") {
-        void rememberSource({ mode: "local", handle: selected.root.handle as FileSystemDirectoryHandle });
-      }
+      const handle = directoryHandleFor(selected.root);
+      if (handle) void rememberSource({ mode: "local", handle });
       withdrawReopenOffer();
       welcomeDialog.close();
     } else {

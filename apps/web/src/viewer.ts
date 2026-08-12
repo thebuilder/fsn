@@ -1,4 +1,4 @@
-import { formatBytes, type FsNode } from "./filesystem";
+import { browserResourceUrl, formatBytes, readBrowserResource, type FsNode } from "./filesystem";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
 import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost, WindowFit } from "./viewers/types";
@@ -136,14 +136,14 @@ export class FileViewer {
         return new Uint8Array(await slice.arrayBuffer());
       },
       text: async (limit = MAX_TEXT_BYTES) => {
-        if (node.demoContent !== undefined) return node.demoContent;
         const source = await blob();
         if (source.size > limit) throw new Error(`Object exceeds the ${formatBytes(limit)} terminal buffer.`);
         return source.text();
       },
       url: async () => {
-        if (node.demoAsset && !node.file) return node.demoAsset;
-        const url = URL.createObjectURL(node.file ?? (await blob()));
+        const direct = browserResourceUrl(node);
+        if (direct) return direct;
+        const url = URL.createObjectURL(await blob());
         this.objectUrls.push(url);
         return url;
       },
@@ -172,14 +172,7 @@ export class FileViewer {
 
   /** Local files, demo assets and inline demo text all reduce to one blob. */
   private async readPayload(node: FsNode, signal: AbortSignal): Promise<Blob> {
-    if (node.file) return node.file;
-    if (node.demoAsset) {
-      const response = await fetch(node.demoAsset, { signal });
-      if (!response.ok) throw new Error(`Demo object unavailable (HTTP ${response.status}).`);
-      return response.blob();
-    }
-    if (node.demoContent !== undefined) return new Blob([node.demoContent], { type: "text/plain" });
-    throw new Error("This object has no readable bytes in the current session.");
+    return readBrowserResource(node, signal);
   }
 
   private addToggle(spec: ToggleSpec, signal: AbortSignal): void {

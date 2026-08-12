@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FSN",
+  "version": "0.1.0",
+  "identifier": "dev.dreijer.fsn",
+  "build": {
+    "beforeDevCommand": "pnpm dev:webview",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build:webview",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FSN",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "capabilities": ["desktop"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    }
+  }
+}

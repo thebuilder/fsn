@@ -1,10 +1,17 @@
-import type { FilesystemRoot, FsNode } from "./filesystem";
+import { registerBrowserTextResource, registerBrowserUrlResource, type FilesystemRoot, type FsNode } from "./filesystem";
 
 const now = Date.now();
 const day = 86_400_000;
+let resourceSequence = 0;
 
 function file(name: string, size: number, ageDays: number, content?: string, demoAsset?: string): FsNode {
-  return { id: "", parentId: null, name, kind: "file", size, modified: now - ageDays * day, demoContent: content, demoAsset };
+  const resourceId = `demo:${resourceSequence++}`;
+  const resource = content !== undefined
+    ? registerBrowserTextResource(resourceId, content)
+    : demoAsset
+      ? registerBrowserUrlResource(resourceId, demoAsset)
+      : undefined;
+  return { id: "", parentId: null, name, kind: "file", size, modified: now - ageDays * day, resource };
 }
 
 function directory(name: string, children: FsNode[]): FsNode {
