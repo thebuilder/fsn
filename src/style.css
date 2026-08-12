@@ -416,9 +416,12 @@
   .search-results kbd { min-width: 1.9rem; align-items: center; padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; }
   .search-empty { padding: 3rem; color: var(--muted); font: 650 0.64rem var(--mono); text-align: center; }
 
-  .file-viewer { width: min(65rem, calc(100vw - 2rem)); height: min(44rem, calc(100vh - 2rem)); padding: 0; border: 1px solid #74988e; background: #758b83; color: #09100f; box-shadow: 0 2rem 8rem #000; }
+  /* The browser's own dialog cap sits a little inside these, and would quietly shave a
+     window that asks to be as tall as it is allowed; these mirror VIEWPORT_INSET in
+     viewer.ts, which is what actually holds the window off the viewport edge. */
+  .file-viewer { width: min(65rem, calc(100vw - 2rem)); height: min(44rem, calc(100dvh - 2rem)); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 0; border: 1px solid #74988e; background: #758b83; color: #09100f; box-shadow: 0 2rem 8rem #000; }
   /* Overrides any width/height the grow box has written inline, so zooming always fills. */
-  .file-viewer.is-maximized { width: calc(100vw - 1rem) !important; height: calc(100vh - 1rem) !important; }
+  .file-viewer.is-maximized { width: calc(100vw - 1rem) !important; height: calc(100dvh - 1rem) !important; }
   .file-viewer[open] { animation: viewer-in 180ms steps(4, end); }
   .viewer-window { position: relative; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 3px double #263d38; background: #b6c4be; }
   /* The pinstripes are the window-chrome texture; each control sits on a solid plate
@@ -462,12 +465,18 @@
   .viewer-footer { min-height: 1.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0 1.4rem 0 0.55rem; border-top: 1px solid #536c65; color: #263e38; font: 700 0.48rem var(--mono); }
   .viewer-footer span:first-child { display: flex; align-items: center; gap: 0.4rem; }
   .viewer-led { width: 0.4rem; height: 0.4rem; background: #16b688; box-shadow: 0 0 4px #16b688; }
-  .image-view { min-height: 100%; max-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; margin: 0; padding: 1rem; background-color: #14221f; background-image: linear-gradient(45deg, #0d1917 25%, transparent 25%), linear-gradient(-45deg, #0d1917 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0d1917 75%), linear-gradient(-45deg, transparent 75%, #0d1917 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
-  /* min-height:0 lets a tall photo shrink instead of pushing the caption out of view. */
-  .image-view .image-surface { max-width: 100%; max-height: 34rem; min-height: 0; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
-  .image-view figcaption { flex: none; }
-  .image-view figcaption { padding: 0.25rem 0.55rem; background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
-  .text-document { min-height: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); background: #081210; }
+  /* An explicit row for the picture and one for the caption: the picture's row is the
+     only flexible one, which gives it a definite height to scale itself against and
+     keeps the frame around it even top and bottom. */
+  .image-view { min-height: 100%; max-height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0.7rem; margin: 0; padding: 1rem; background-color: #14221f; background-image: linear-gradient(45deg, #0d1917 25%, transparent 25%), linear-gradient(-45deg, #0d1917 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0d1917 75%), linear-gradient(-45deg, transparent 75%, #0d1917 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
+  /* Capped by the stage, so a tall photo shrinks to fit rather than running past the
+     frame and taking the caption with it. */
+  .image-view .image-surface { max-width: 100%; max-height: 100%; min-height: 0; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
+  .image-view figcaption { justify-self: center; padding: 0.25rem 0.55rem; background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
+  /* A pane that scrolls sideways is wider than its scrollport, and a box sized to the
+     scrollport paints only the first screenful — the rest scrolls onto bare frame. These
+     views size to their own content instead, so their background travels with the text. */
+  .text-document { min-height: 100%; width: max-content; min-width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); background: #081210; }
   .line-numbers { margin: 0; padding: 1.25rem 0.75rem 1.25rem 2.6rem; border-right: 1px solid rgba(117,255,216,.14); background: #0c1916; color: #416e62; font: 0.7rem/1.65 var(--mono); text-align: right; user-select: none; }
   .text-document pre { min-width: max-content; margin: 0; padding: 1.25rem; color: #b8ffe9; font: 0.72rem/1.65 var(--mono); tab-size: 2; white-space: pre-wrap; text-shadow: 0 0 8px rgba(107,255,218,.16); }
   .viewer-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 1rem; color: #8eeed3; font: 700 0.65rem var(--mono); letter-spacing: .12em; }
@@ -527,7 +536,10 @@
   .viewer-switch .tool-toggle + .tool-toggle { border-left-width: 0; }
   .viewer-switch .tool-toggle:first-child { border-radius: 0.15rem 0 0 0.15rem; }
   .viewer-switch .tool-toggle:last-child { border-radius: 0 0.15rem 0.15rem 0; }
-  .pdf-view { width: 100%; height: 100%; min-height: 34rem; border: 0; background: #fff; }
+  /* The reader fills the pane exactly: a minimum height would only hand it a scrollbar
+     around a document that already scrolls itself, and an inline frame left on a text
+     baseline leaves a few scrolling pixels under it. */
+  .pdf-view { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
   .viewer-tools { display: flex; align-items: center; gap: 0.4rem; }
   .media-display.is-slim { min-width: 0; padding: 0.7rem; }
   .media-display.is-slim .equalizer { height: 2.4rem; }
@@ -535,10 +547,12 @@
   .media-display.is-dead .equalizer i { background: #4a2732; box-shadow: none; }
 
   /* The source image stays laid out under the canvas: a detached <img> stops animating,
-     and the pixel filter samples its live frame every tick. */
-  .image-stage { position: relative; display: grid; place-items: center; min-height: 0; }
+     and the pixel filter samples its live frame every tick. Explicit tracks, not the
+     implicit content-sized ones: a percentage cap on a picture inside an auto row is
+     circular, so the browser drops it and the image overflows instead. */
+  .image-stage { position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; min-height: 0; max-width: 100%; max-height: 100%; }
   .image-stage > * { grid-area: 1 / 1; }
-  .image-stage .image-source { max-width: 100%; max-height: 34rem; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
+  .image-stage .image-source { max-width: 100%; max-height: 100%; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
   .image-stage.is-filtered .image-source { opacity: 0; pointer-events: none; }
   .image-stage:not(.is-filtered) canvas { display: none; }
   .image-view .image-surface { image-rendering: pixelated; filter: contrast(1.12) saturate(.82); }
@@ -553,7 +567,7 @@
   .sheet td.is-numeric { color: var(--amber); text-align: right; font-variant-numeric: tabular-nums; }
   .sheet-note { margin: 0.8rem 0 0; color: #4d8477; font: 600 0.55rem var(--mono); }
 
-  .json-view { min-height: 100%; padding: 1.1rem 1.3rem; background: #081210; color: #b8ffe9; font: 0.72rem/1.7 var(--mono); }
+  .json-view { min-height: 100%; width: max-content; min-width: 100%; padding: 1.1rem 1.3rem; background: #081210; color: #b8ffe9; font: 0.72rem/1.7 var(--mono); }
   .json-branch > summary { display: flex; gap: 0.5rem; cursor: pointer; list-style: none; }
   .json-branch > summary::before { color: #4d8477; content: "▸"; }
   .json-branch[open] > summary::before { content: "▾"; }
@@ -594,7 +608,7 @@
   .model-stage canvas { display: block; width: 100%; height: 100%; }
   .model-readout { margin: 0; padding: 0.4rem 0.7rem; border-top: 1px solid rgba(117,255,216,.16); background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
 
-  .hex-view { min-height: 100%; padding: 1rem; background: #081210; }
+  .hex-view { min-height: 100%; width: max-content; min-width: 100%; padding: 1rem; background: #081210; }
   .hex-table { margin: 0; font: 0.68rem/1.55 var(--mono); }
   .hex-row { display: flex; gap: 1.4rem; }
   .hex-row:hover { background: rgba(117,255,216,.07); }
@@ -663,7 +677,9 @@
   .welcome-copy h2 { font-size: 2.1rem; }
   .welcome-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .welcome-actions .button { width: 100%; }
-  .file-viewer { width: 100vw; height: 100vh; max-width: none; max-height: none; border: 0; }
+  /* Dynamic units, not 100vh: a phone browser's own bars are inside the large viewport,
+     so a window sized against that hangs off both ends of the screen. */
+  .file-viewer { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; }
   .viewer-toolbar { align-items: start; flex-direction: column; gap: .4rem; }
   .viewer-toolbar > div { width: 100%; justify-content: space-between; }
   .access-denied { padding: 1.5rem; }

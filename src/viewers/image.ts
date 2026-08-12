@@ -47,6 +47,15 @@ export async function render(host: ViewerHost): Promise<void> {
   figure.append(stage, el("figcaption", undefined, `${image.naturalWidth} × ${image.naturalHeight} PX / ${sequence ? `${sequence.frames} FRAME SEQUENCE` : "RGB CHANNEL"}`));
   host.mount(figure);
   host.onCleanup(() => sequence?.close());
+  // The window takes the picture's shape; the figure's padding and caption are measured
+  // off the stage by the host, so they survive the fit instead of being squeezed out.
+  host.fitWindow({
+    aspect: image.naturalWidth / image.naturalHeight,
+    region: stage,
+    // The image is never upscaled, so a window wider than the source would only add matting.
+    maxWidth: image.naturalWidth,
+    narrow: true,
+  });
 
   const paint = createPainter(canvas, image.naturalWidth, image.naturalHeight);
   if ((animated && !sequence) || !paint(image)) {

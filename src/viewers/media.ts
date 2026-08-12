@@ -53,6 +53,17 @@ export async function render(host: ViewerHost): Promise<void> {
   host.mount(deck);
   host.setStatus("MEDIA READY");
 
+  if (media instanceof HTMLVideoElement) {
+    // The picture is what the window is for; the meter and transport below it are fixed
+    // furniture, so they are measured off and the rest of the frame follows the movie.
+    const fitToFrame = (): void => {
+      if (!media.videoWidth || !media.videoHeight) return;
+      host.fitWindow({ aspect: media.videoWidth / media.videoHeight, region: media, maxWidth: media.videoWidth, narrow: true });
+    };
+    media.addEventListener("loadedmetadata", fitToFrame);
+    fitToFrame();
+  }
+
   const analyser = createAudioAnalyser(media);
   // An AudioContext may only start from a gesture, so the graph waits for the first play.
   media.addEventListener("play", analyser.start);
