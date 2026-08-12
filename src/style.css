@@ -85,7 +85,15 @@
    * lit plate with its objects laid flat — the reveal spoiled before it is offered.
    * The canvas sits dark instead, and fades up as the reveal it belongs to starts.
    */
-  :root[data-world="held"] #world { opacity: 0; }
+  :root[data-welcome="held"] #world { opacity: 0; }
+  /**
+   * And the interface waits for the backdrop rather than racing it. Two fades multiplied
+   * together peak brighter than either one settles: the frame reaches full while the
+   * scrim is still half applied and nothing is dimming it yet, so the heading flashes up
+   * some three times brighter than the value it was always going to hold, then sinks
+   * back. Following the backdrop in costs a beat and means it only ever rises.
+   */
+  :root[data-welcome="held"] #app { transition-delay: 300ms; }
   .scene-switching #world { filter: brightness(1.55) saturate(0.7); opacity: 0.7; }
 
   .skip-link {

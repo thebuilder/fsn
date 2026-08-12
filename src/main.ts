@@ -133,14 +133,14 @@ let welcomeHold = false;
 
 function holdBehindWelcome(): void {
   welcomeHold = true;
-  document.documentElement.dataset.world = "held";
+  document.documentElement.dataset.welcome = "held";
   world.holdReveal();
 }
 
 function releaseBehindWelcome(): void {
   if (!welcomeHold) return;
   welcomeHold = false;
-  delete document.documentElement.dataset.world;
+  delete document.documentElement.dataset.welcome;
   world.releaseReveal();
   // Forgetting the trail is what makes every crumb read as new, so the whole path
   // draws itself in rather than appearing already written.
