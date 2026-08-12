@@ -81,7 +81,19 @@ type CameraFlight = {
   fromTarget: THREE.Vector3;
   toPosition: THREE.Vector3;
   toTarget: THREE.Vector3;
+  ease: (progress: number) => number;
+  /** An establishing shot yields the moment a hand touches the controls. */
+  interruptible: boolean;
 };
+
+/** Symmetric ease with no hard edge at either end: a camera on rails, not on a spring. */
+function smootherstep(progress: number): number {
+  return progress * progress * progress * (progress * (progress * 6 - 15) + 10);
+}
+
+function easeInOutCubic(progress: number): number {
+  return progress < 0.5 ? 4 * progress ** 3 : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
 
 const palette: Record<FileCategory, number> = {
   directory: 0xf2557e,
@@ -186,6 +198,24 @@ const BOOST_MULTIPLIER = 3.5;
 const INTRO_RISE = 420;
 const INTRO_STAGGER = 460;
 const INTRO_LABEL_FADE = 240;
+/** How far ahead of its height an object's footprint opens: 4 means by the first quarter. */
+const INTRO_SPREAD_LEAD = 4;
+
+/**
+ * The establishing shot, expressed against the framing pose the flight lands on: it
+ * begins that many times further out, that much higher again, and swung round by
+ * INTRO_SWING radians, so the descent has an arc in it rather than being a straight
+ * dolly. Long enough that the skyline finishes rising well before the camera settles.
+ *
+ * Restrained on purpose. Opening much higher turns the shot into a satellite view of a
+ * district too small to read, across a floor grid steep enough that its lines alias
+ * against each other and crawl for the whole descent. This clears the skyline and keeps
+ * the subject legible from the first frame.
+ */
+const INTRO_PULL_BACK = 1.75;
+const INTRO_ALTITUDE = 0.72;
+const INTRO_SWING = 0.42;
+const INTRO_FLIGHT = 2600;
 
 /** Per-second decay constants for frame-rate independent easing: 1 - pow(k, delta). */
 const EASE_HOVER = 0.000002;
@@ -508,6 +538,7 @@ export class WorldScene {
   private currentArea: DirectoryArea | null = null;
   private flight: CameraFlight | null = null;
   private intro: AreaIntro | null = null;
+  private revealHeld = false;
   private hovered: FsNode | null = null;
   private aimed: Placement | null = null;
   private keyboardNavigationActive = false;
@@ -533,7 +564,17 @@ export class WorldScene {
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly callbacks: SceneCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    /**
+     * The buffer has to land on the display's pixel grid rather than between it. At 1.5
+     * on a 2x screen every frame is stretched by a third on its way to the glass, and
+     * resampling a moving image is what makes a slow camera shimmer: grid lines, tower
+     * edges and outlines are all about a pixel wide, so each one redistributes its
+     * brightness across a different pair of device pixels every frame and crawls.
+     *
+     * Matching the device ratio is 1:1 on every common display and costs the fill rate
+     * that buys back. The cap is for the 3x screens, where 1:1 is not worth its price.
+     */
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
@@ -593,6 +634,12 @@ export class WorldScene {
 
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
+    // Captured on the window, which is the only place that reliably runs before the
+    // controls' own listener on the canvas: handing the controls back first is what
+    // lets the gesture that ends the establishing shot also orbit, rather than being
+    // spent on stopping the camera.
+    window.addEventListener("pointerdown", this.takeOverFlight, true);
+    window.addEventListener("wheel", this.takeOverFlight, { capture: true, passive: true });
     this.canvas.addEventListener("dblclick", this.onDoubleClick);
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     // Capture phase: a key release must reach us even if something nearer the target
@@ -622,7 +669,9 @@ export class WorldScene {
     this.setActiveArea(area);
     // Only reveal on first build; re-entering a known directory should not replay it.
     if (isNew) this.startIntro(area);
-    this.flyToArea(area, direction === "initial");
+    // A new filesystem is an arrival, so it gets the establishing shot; moving within
+    // one is navigation, and travels at the pace the person is already moving at.
+    this.flyToArea(area, direction === "initial" ? "establish" : "travel");
     this.clearSelectionAndAim();
   }
 
@@ -1004,16 +1053,33 @@ export class WorldScene {
    * clear the skyline as well as the floor or the view ends up looking along the
    * streets at eye level instead of over the city.
    */
-  private flyToArea(area: DirectoryArea, immediate: boolean): void {
+  private flyToArea(area: DirectoryArea, arrival: "travel" | "establish"): void {
     const distance = Math.max(22, area.radius * 1.7, area.peakHeight * 3.6);
     const toTarget = area.center.clone().add(new THREE.Vector3(0, area.peakHeight * 0.3, 0));
     const toPosition = area.center.clone().add(new THREE.Vector3(0, distance * 0.68, distance));
-    this.flyTo(toTarget, toPosition, immediate);
+    if (arrival === "travel") {
+      this.flyTo(toTarget, toPosition);
+      return;
+    }
+    // Open wide and high, off to one side, looking down at where the district will be;
+    // the flight then falls into the framing pose as the last towers finish rising.
+    const reach = distance * INTRO_PULL_BACK;
+    this.camera.position.copy(area.center).add(
+      new THREE.Vector3(Math.sin(INTRO_SWING) * reach, reach * INTRO_ALTITUDE, Math.cos(INTRO_SWING) * reach),
+    );
+    this.controls.target.copy(area.center).add(new THREE.Vector3(0, area.peakHeight * 1.1, 0));
+    // The pose is teleported into, so it has to aim itself: the controls are what
+    // normally keep the camera pointed at the target, and they stand down for flights.
+    this.camera.lookAt(this.controls.target);
+    this.flyTo(toTarget, toPosition, { duration: INTRO_FLIGHT, ease: smootherstep, interruptible: true });
   }
 
-  private flyTo(toTarget: THREE.Vector3, toPosition: THREE.Vector3, immediate = false): void {
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (immediate || reducedMotion) {
+  private flyTo(
+    toTarget: THREE.Vector3,
+    toPosition: THREE.Vector3,
+    options: { duration?: number; ease?: (progress: number) => number; interruptible?: boolean } = {},
+  ): void {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       this.flight = null;
       this.camera.position.copy(toPosition);
       this.controls.target.copy(toTarget);
@@ -1025,19 +1091,54 @@ export class WorldScene {
     const distance = this.camera.position.distanceTo(toPosition);
     this.flight = {
       startedAt: performance.now(),
-      duration: THREE.MathUtils.clamp(distance * 12, 350, 1400),
+      duration: options.duration ?? THREE.MathUtils.clamp(distance * 12, 350, 1400),
       fromPosition: this.camera.position.clone(),
       fromTarget: this.controls.target.clone(),
       toPosition,
       toTarget,
+      ease: options.ease ?? easeInOutCubic,
+      interruptible: options.interruptible ?? false,
     };
     this.controls.enabled = false;
+  }
+
+  private advanceFlight(): void {
+    const flight = this.flight;
+    if (!flight) return;
+    const progress = THREE.MathUtils.clamp((performance.now() - flight.startedAt) / flight.duration, 0, 1);
+    const eased = flight.ease(progress);
+    this.camera.position.lerpVectors(flight.fromPosition, flight.toPosition, eased);
+    this.controls.target.lerpVectors(flight.fromTarget, flight.toTarget, eased);
+    this.camera.lookAt(this.controls.target);
+    if (progress < 1) return;
+    this.camera.position.copy(flight.toPosition);
+    this.controls.target.copy(flight.toTarget);
+    this.flight = null;
+    this.controls.enabled = true;
   }
 
   private cancelFlight(): void {
     if (!this.flight) return;
     this.flight = null;
     this.controls.enabled = true;
+  }
+
+  /**
+   * Freezes the reveal that is about to be built at frame zero. The welcome screen sits
+   * over the world it is offering, and a skyline that rose and a camera that landed
+   * behind a blurred backdrop is a reveal nobody saw.
+   */
+  holdReveal(): void {
+    this.revealHeld = true;
+  }
+
+  /** Runs whatever was held, from the top. Safe to call when nothing is holding. */
+  releaseReveal(): void {
+    if (!this.revealHeld) return;
+    this.revealHeld = false;
+    const now = performance.now();
+    if (this.intro) this.intro.startedAt = now;
+    if (this.flight) this.flight.startedAt = now;
   }
 
   private startIntro(area: DirectoryArea): void {
@@ -1064,9 +1165,14 @@ export class WorldScene {
       if (progress < 1) settled = false;
       const eased = 1 - Math.pow(1 - progress, 3);
       const height = Math.max(placement.scale.y * eased, 0.0001);
+      // The footprint opens ahead of the height, and from nothing. A box with no height
+      // still shows its whole top face to a camera looking down at it, so an unopened
+      // district read as its own floor plan: every plot and marker laid out flat, the
+      // answer printed above the reveal that is about to give it.
+      const spread = Math.max(Math.min(eased * INTRO_SPREAD_LEAD, 1), 0.0001);
       if (placement.mesh && placement.instanceIndex !== undefined) {
         position.set(placement.position.x, GROUND_TOP + height / 2, placement.position.z);
-        scale.set(placement.scale.x, height, placement.scale.z);
+        scale.set(placement.scale.x * spread, height, placement.scale.z * spread);
         matrix.compose(position, rotation, scale);
         placement.mesh.setMatrixAt(placement.instanceIndex, matrix);
       }
@@ -1075,7 +1181,7 @@ export class WorldScene {
         if (!decor.mesh || decor.instanceIndex === undefined) return;
         const markerHeight = Math.max(decor.scale.y * eased, 0.0001);
         position.set(decor.position.x, GROUND_TOP + height + markerHeight / 2, decor.position.z);
-        scale.set(decor.scale.x, markerHeight, decor.scale.z);
+        scale.set(decor.scale.x * spread, markerHeight, decor.scale.z * spread);
         matrix.compose(position, rotation, scale);
         decor.mesh.setMatrixAt(decor.instanceIndex, matrix);
       });
@@ -1128,7 +1234,7 @@ export class WorldScene {
 
   /** Returns the camera to the active directory after wandering off. */
   refocus(): void {
-    if (this.currentArea) this.flyToArea(this.currentArea, false);
+    if (this.currentArea) this.flyToArea(this.currentArea, "travel");
   }
 
   getAimedNode(): FsNode | null {
@@ -1193,7 +1299,9 @@ export class WorldScene {
     starGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     const stars = new THREE.Points(starGeometry, new THREE.PointsMaterial({
       color: 0x83c9b8,
-      size: 1.9,
+      // Unattenuated point size is buffer pixels, not screen pixels, so it has to be
+      // told the ratio: otherwise a sharper buffer quietly shrinks the sky to specks.
+      size: 1.3 * this.renderer.getPixelRatio(),
       sizeAttenuation: false,
       transparent: true,
       opacity: 0.5,
@@ -1332,6 +1440,14 @@ export class WorldScene {
     this.callbacks.onHover(hit?.node ?? null, event.clientX, event.clientY);
   };
 
+  /**
+   * Ends an establishing shot the moment the view is touched. Flights that did not offer
+   * to be interrupted — travelling somewhere the user asked to go — are left to finish.
+   */
+  private takeOverFlight = (event: Event): void => {
+    if (this.flight?.interruptible && event.target === this.canvas) this.cancelFlight();
+  };
+
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
     this.setKeyboardNavigationActive(false);
@@ -1436,26 +1552,13 @@ export class WorldScene {
 
   private animate = (): void => {
     const delta = Math.min(this.clock.getDelta(), 0.05);
-    if (this.flight) {
-      const elapsed = performance.now() - this.flight.startedAt;
-      const progress = THREE.MathUtils.clamp(elapsed / this.flight.duration, 0, 1);
-      const eased = progress < 0.5
-        ? 4 * progress * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-      this.camera.position.lerpVectors(this.flight.fromPosition, this.flight.toPosition, eased);
-      this.controls.target.lerpVectors(this.flight.fromTarget, this.flight.toTarget, eased);
-      if (progress >= 1) {
-        this.camera.position.copy(this.flight.toPosition);
-        this.controls.target.copy(this.flight.toTarget);
-        this.flight = null;
-        this.controls.enabled = true;
-      }
-    } else {
-      this.updateMovement(delta);
-    }
+    // A held reveal keeps its opening frame: the flight stays parked at its wide pose
+    // and the towers stay flat until whatever is covering them gets out of the way.
+    if (!this.flight) this.updateMovement(delta);
+    else if (!this.revealHeld) this.advanceFlight();
 
     this.updateActivation(delta);
-    if (this.intro && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
     // After the reveal, so the lift survives the intro's matrix rewrites.
@@ -1469,7 +1572,13 @@ export class WorldScene {
     if (this.selectionBox.visible) {
       (this.selectionBox.material as THREE.LineBasicMaterial).opacity = 0.72 + Math.sin(performance.now() * 0.006) * 0.22;
     }
-    this.controls.update();
+    // A flight owns the camera outright. `update()` ignores `enabled` — every call
+    // re-derives the position from its own spherical state, clamps the radius to
+    // `maxDistance` and the pitch to `maxPolarAngle`, and bleeds off leftover damping,
+    // all of it written over the pose the flight just set. Letting it run alongside a
+    // long approach is a tug of war, and the further out the shot opens the harder it
+    // pulls. It picks the camera back up on the first frame after the flight lands.
+    if (!this.flight) this.controls.update();
     if (performance.now() - this.lastAimCheck > 80) {
       this.lastAimCheck = performance.now();
       this.checkAreaEntry();
@@ -1483,6 +1592,8 @@ export class WorldScene {
     cancelAnimationFrame(this.frame);
     window.removeEventListener("keydown", this.onKeyDown, true);
     window.removeEventListener("keyup", this.onKeyUp, true);
+    window.removeEventListener("pointerdown", this.takeOverFlight, true);
+    window.removeEventListener("wheel", this.takeOverFlight, true);
     window.removeEventListener("blur", this.releaseMovement);
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.disposeWorld();
