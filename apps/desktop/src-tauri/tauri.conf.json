@@ -24,9 +24,9 @@
       "capabilities": ["desktop"],
       "csp": {
         "default-src": "'self'",
-        "connect-src": "ipc: http://ipc.localhost",
+        "connect-src": "'self' ipc: http://ipc.localhost blob:",
         "base-uri": "'none'",
-        "font-src": "'self' data:",
+        "font-src": "'self' blob: data:",
         "form-action": "'none'",
         "frame-src": "'self' blob:",
         "img-src": "'self' blob: data:",
@@ -39,10 +39,5 @@
   "bundle": {
     "active": true,
     "targets": "all"
-  },
-  "plugins": {
-    "fs": {
-      "requireLiteralLeadingDot": false
-    }
   }
 }

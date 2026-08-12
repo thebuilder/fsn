@@ -1,16 +1,16 @@
 /**
- * Regenerates public/demo-models/resonator-coil.stl.
+ * Regenerates the package-owned demo model shared by the web and desktop apps.
  *
  * The demo filesystem has no File objects behind it, so anything the model viewer
- * should open in demo mode needs real bytes served from public/. Run with:
+ * should open in demo mode needs real bytes bundled by @fsn/app. Run from the repo:
  *
- *   node tools/make-demo-model.mjs
+ *   node packages/app/tools/make-demo-model.mjs
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 
-const OUTPUT = fileURLToPath(new URL("../public/demo-models/resonator-coil.stl", import.meta.url));
+const OUTPUT = fileURLToPath(new URL("../src/assets/demo-models/resonator-coil.stl", import.meta.url));
 
 /** Serialises a non-indexed BufferGeometry as binary STL (84-byte header + 50 bytes per facet). */
 function toBinaryStl(geometry) {
@@ -43,6 +43,6 @@ const geometry = new THREE.TorusKnotGeometry(10, 3.2, 128, 20, 2, 3).toNonIndexe
 geometry.computeVertexNormals();
 const stl = toBinaryStl(geometry);
 
-await mkdir(fileURLToPath(new URL("../public/demo-models", import.meta.url)), { recursive: true });
+await mkdir(fileURLToPath(new URL("../src/assets/demo-models", import.meta.url)), { recursive: true });
 await writeFile(OUTPUT, stl);
 console.log(`wrote ${OUTPUT} (${stl.length} bytes, ${(stl.length - 84) / 50} facets)`);

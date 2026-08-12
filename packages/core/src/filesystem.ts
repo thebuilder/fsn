@@ -55,18 +55,51 @@ export type FilesystemRoot = {
   isLocal: boolean;
 };
 
+/**
+ * UTF-8 source, configuration, data and template formats that are safe to hand
+ * to the text viewer. This is intentionally an allow-list: extensions with
+ * common binary variants (for example plist, generic lock/map, and compiled
+ * protobuf files) stay out unless their textual form has an unambiguous extension
+ * or filename.
+ */
 const codeExtensions = new Set([
-  "astro", "bash", "bat", "c", "cfg", "cjs", "clj", "cljs", "cmd", "conf", "cpp", "cs", "css", "cts", "dart", "diff", "elm", "erl", "ex", "exs", "fish", "fs", "go", "gql", "gradle", "graphql", "groovy", "h", "hcl", "hpp", "hs", "html", "ini", "java", "jl", "js", "json", "json5", "jsonc", "jsx", "kt", "kts", "less", "lua", "mjs", "mts", "mdx", "nim", "patch", "php", "pl", "properties", "proto", "ps1", "py", "r", "rb", "rs", "sass", "scala", "scss", "sh", "sql", "styl", "svelte", "swift", "tf", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml", "zig", "zsh",
+  "asm", "astro", "avdl", "avsc", "awk",
+  "bash", "bat", "bazel", "bzl",
+  "c", "cc", "cfg", "cjs", "clj", "cljs", "cmake", "cmd", "cnf", "coffee", "conf", "cpp", "cs", "cshtml", "csproj", "css", "cts", "cu", "cue", "cuh", "cxx",
+  "d", "dart", "diff", "dockerfile",
+  "ejs", "elm", "env", "erb", "erl", "ex", "exs",
+  "feature", "fish", "frag", "fs", "fsi", "fsproj", "fsx",
+  "geojson", "glsl", "go", "gql", "gradle", "graphql", "graphqls", "groovy",
+  "h", "handlebars", "har", "hbs", "hcl", "hh", "hpp", "hs", "html", "http", "hxx",
+  "ini", "ipynb",
+  "java", "jl", "js", "json", "json5", "jsonc", "jsonl", "jsx",
+  "kt", "kts",
+  "less", "liquid", "lua",
+  "m", "mdx", "metal", "mjs", "mm", "mts", "mustache",
+  "ndjson", "nim", "nix", "njk", "nomad",
+  "pas", "patch", "php", "pl", "prisma", "properties", "props", "proto", "ps1", "pug", "py",
+  "r", "razor", "rb", "rego", "resx", "robot", "rs",
+  "sass", "scala", "scss", "sed", "service", "sh", "shader", "sln", "sol", "sql", "storyboard", "styl", "svelte", "swift",
+  "targets", "tcl", "tf", "tfstate", "tfvars", "thrift", "toml", "ts", "tsx", "twig",
+  "v", "vb", "vbproj", "vbs", "vcxproj", "vert", "vhd", "vhdl", "vue",
+  "wat", "webmanifest", "wgsl", "wit",
+  "xaml", "xcconfig", "xib", "xlf", "xliff", "xml", "xsd", "xslt",
+  "yaml", "yml",
+  "zig", "zsh",
 ]);
+const textDocumentExtensions = [
+  "adoc", "asciidoc", "ics", "log", "markdown", "md", "mdown", "mkd", "nfo", "org", "po", "pot", "qmd", "rmd", "rst", "rtf", "srt", "tex", "text", "txt", "vtt",
+] as const;
+const tabularTextExtensions = ["csv", "tsv"] as const;
 const imageExtensions = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"]);
 const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "ogv", "webm"]);
-const documentExtensions = new Set(["csv", "doc", "docx", "log", "md", "nfo", "pdf", "rtf", "text", "tsv", "txt"]);
+const documentExtensions = new Set([...tabularTextExtensions, ...textDocumentExtensions, "doc", "docx", "pdf"]);
 const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "jar", "rar", "tar", "tgz", "zip"]);
 const modelExtensions = new Set(["glb", "gltf", "obj", "ply", "stl"]);
 const fontExtensions = new Set(["otf", "ttf", "woff", "woff2"]);
 const systemExtensions = new Set(["app", "bin", "dat", "dll", "dylib", "exe", "pkg", "so"]);
-const textExtensions = new Set([...codeExtensions, "csv", "log", "md", "nfo", "rtf", "text", "tsv", "txt"]);
+const textExtensions = new Set([...codeExtensions, ...tabularTextExtensions, ...textDocumentExtensions]);
 
 /**
  * Files whose type lives in the name rather than an extension. Without these, an
@@ -74,9 +107,13 @@ const textExtensions = new Set([...codeExtensions, "csv", "log", "md", "nfo", "r
  * dotfile fall through `extensionOf` with nothing to classify.
  */
 const namedFiles = new Map<string, FileCategory>([
-  ...["makefile", "dockerfile", "containerfile", "justfile", "rakefile", "gemfile", "podfile", "procfile", "brewfile", "vagrantfile", "jenkinsfile"].map((name) => [name, "code"] as const),
-  ...[".babelrc", ".browserslistrc", ".dockerignore", ".editorconfig", ".env", ".eslintrc", ".gitattributes", ".gitignore", ".gitmodules", ".htaccess", ".npmrc", ".nvmrc", ".prettierrc", ".yarnrc"].map((name) => [name, "code"] as const),
-  ...["authors", "changelog", "changes", "codeowners", "contributing", "contributors", "copying", "install", "license", "licence", "news", "notice", "readme", "todo", "version"].map((name) => [name, "document"] as const),
+  ...[
+    "brewfile", "buck", "cargo.lock", "composer.lock", "containerfile", "dockerfile", "flake.lock", "gemfile", "gemfile.lock", "go.mod", "go.sum", "gradlew", "jenkinsfile", "justfile", "makefile", "meson.build", "mvnw", "pipfile", "pipfile.lock", "podfile", "poetry.lock", "procfile", "rakefile", "vagrantfile", "workspace", "yarn.lock",
+  ].map((name) => [name, "code"] as const),
+  ...[
+    ".babelrc", ".browserslistrc", ".commitlintrc", ".dockerignore", ".editorconfig", ".env", ".envrc", ".eslintignore", ".eslintrc", ".gitattributes", ".gitignore", ".gitkeep", ".gitmodules", ".htaccess", ".lintstagedrc", ".mailmap", ".node-version", ".npmignore", ".npmrc", ".nvmrc", ".prettierignore", ".prettierrc", ".python-version", ".ruby-version", ".stylelintignore", ".stylelintrc", ".swcrc", ".tool-versions", ".watchmanconfig", ".yarnrc",
+  ].map((name) => [name, "code"] as const),
+  ...["authors", "changelog", "changes", "codeowners", "contributing", "contributors", "copying", "install", "license", "licence", "news", "notice", "readme", "security", "todo", "version"].map((name) => [name, "document"] as const),
 ]);
 
 export function extensionOf(name: string): string {
@@ -120,7 +157,8 @@ export function hasBytes(node: FsNode): boolean {
 export function canReadAsText(node: FsNode): boolean {
   if (node.kind !== "file") return false;
   const extension = extensionOf(node.name);
-  return extension ? textExtensions.has(extension) : namedCategory(node.name) !== undefined;
+  const named = namedCategory(node.name);
+  return textExtensions.has(extension) || named === "code" || named === "document";
 }
 
 export function formatBytes(bytes?: number): string {

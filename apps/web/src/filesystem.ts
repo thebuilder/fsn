@@ -23,6 +23,12 @@ type BrowserResource =
 
 /** Browser objects live here rather than in the platform-neutral filesystem tree. */
 const browserResources = new Map<string, BrowserResource>();
+let sourceSequence = 0;
+
+function sourceId(prefix: "local" | "import", name: string): string {
+  sourceSequence += 1;
+  return `${prefix}:${sourceSequence}:${encodeURIComponent(name)}`;
+}
 
 function registerResource(id: string, resource: BrowserResource, readable: boolean): FsResource {
   browserResources.set(id, resource);
@@ -35,6 +41,15 @@ export function registerBrowserTextResource(id: string, content: string): FsReso
 
 export function registerBrowserUrlResource(id: string, url: string): FsResource {
   return registerResource(id, { kind: "url", url }, true);
+}
+
+/** Drops browser objects owned by a source after the navigator switches away from it. */
+export function disposeBrowserFilesystem(filesystem: FilesystemRoot): void {
+  const visit = (node: FsNode): void => {
+    if (node.resource) browserResources.delete(node.resource.id);
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(filesystem.root);
 }
 
 /** Returns a URL that is already browser-addressable, avoiding an unnecessary fetch/blob round trip. */
@@ -84,7 +99,7 @@ export async function openBrowserDirectory(): Promise<FilesystemRoot | null> {
  * proves the directory is still both present and permitted.
  */
 export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<FilesystemRoot> {
-  const id = `local:${encodeURIComponent(handle.name)}`;
+  const id = sourceId("local", handle.name);
   const root: FsNode = {
     id,
     parentId: null,
@@ -182,7 +197,8 @@ export function rootFromFileList(files: FileList): FilesystemRoot | null {
   if (!items.length) return null;
   const firstPath = items[0].webkitRelativePath || items[0].name;
   const rootName = firstPath.split("/")[0] || "Imported folder";
-  const root: FsNode = { id: `import:${encodeURIComponent(rootName)}`, parentId: null, name: rootName, kind: "directory", children: [] };
+  const rootId = sourceId("import", rootName);
+  const root: FsNode = { id: rootId, parentId: null, name: rootName, kind: "directory", children: [] };
   const directories = new Map<string, FsNode>([[rootName, root]]);
 
   for (const file of items) {
@@ -195,13 +211,13 @@ export function rootFromFileList(files: FileList): FilesystemRoot | null {
       currentPath += `/${name}`;
       let directory = directories.get(currentPath);
       if (!directory) {
-        directory = { id: `import:${encodeURIComponent(currentPath)}`, parentId: current.id, name, kind: "directory", children: [] };
+        directory = { id: `${rootId}/${encodeURIComponent(currentPath)}`, parentId: current.id, name, kind: "directory", children: [] };
         directories.set(currentPath, directory);
         current.children?.push(directory);
       }
       current = directory;
     }
-    const id = `import:${encodeURIComponent(path)}`;
+    const id = `${rootId}/${encodeURIComponent(path)}`;
     current.children?.push({
       id,
       parentId: current.id,

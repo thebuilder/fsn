@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "turbo run dev --filter=@fsn/web --cache-dir=.turbo/cache",
     "dev:web": "turbo run dev --filter=@fsn/web --cache-dir=.turbo/cache",
+    "dev:desktop": "pnpm --filter=@fsn/desktop tauri:dev",
     "build": "turbo run build --cache-dir=.turbo/cache",
+    "build:desktop": "pnpm --filter=@fsn/desktop tauri:build",
     "typecheck": "turbo run typecheck --cache-dir=.turbo/cache",
     "test": "turbo run test --cache-dir=.turbo/cache",
     "check": "turbo run typecheck test build --cache-dir=.turbo/cache"

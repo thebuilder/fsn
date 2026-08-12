@@ -20,7 +20,7 @@ const registry: Entry[] = [
   { id: "model", matches: (node) => categoryOf(node) === "model", load: () => import("./model") },
   { id: "font", matches: (node) => categoryOf(node) === "font", load: () => import("./font") },
   { id: "table", matches: (node) => has(node, "csv", "tsv"), load: () => import("./table") },
-  { id: "json", matches: (node) => has(node, "json", "geojson", "webmanifest"), load: () => import("./json") },
+  { id: "json", matches: (node) => has(node, "avsc", "geojson", "har", "ipynb", "json", "webmanifest"), load: () => import("./json") },
   { id: "text", matches: canReadAsText, load: () => import("./text") },
   { id: "media", matches: (node) => ["audio", "video"].includes(categoryOf(node)), load: () => import("./media") },
   { id: "pdf", matches: (node) => has(node, "pdf"), load: () => import("./pdf") },

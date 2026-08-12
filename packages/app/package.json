@@ -8,6 +8,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./navigator": "./src/navigator.ts",
     "./scene": "./src/scene.ts",
     "./viewer": "./src/viewer.ts",
     "./style.css": "./src/style.css"

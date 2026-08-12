@@ -214,7 +214,7 @@
       <button class="button button-primary" id="welcome-demo" type="button">Explore demo</button>
       <button class="button button-secondary" id="welcome-folder" type="button">Open local folder</button>
     </div>
-    <small>Read-only. No files are uploaded.</small>
+    <small id="welcome-privacy">Read-only. No files are uploaded.</small>
   </div>
 </dialog>
 
@@ -240,7 +240,7 @@
     </div>
     <div class="viewer-content" id="viewer-content" tabindex="-1"></div>
     <footer class="viewer-footer">
-      <span><i class="viewer-led"></i> LOCAL READ-ONLY CHANNEL</span>
+      <span id="viewer-channel"><i class="viewer-led"></i> LOCAL READ-ONLY CHANNEL</span>
       <span id="viewer-position">READY</span>
     </footer>
     <button class="viewer-grow" id="viewer-grow" type="button" aria-label="Resize window (drag, or use the arrow keys)"></button>

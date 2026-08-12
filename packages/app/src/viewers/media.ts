@@ -38,11 +38,13 @@ export async function render(host: ViewerHost): Promise<void> {
   const credit = host.node.demoCredit;
   if (credit) {
     const line = el("p", "media-credit");
-    if (credit.href) {
+    if (credit.href && host.openExternalUrl) {
       const link = el("a", undefined, credit.text);
       link.href = credit.href;
-      link.target = "_blank";
-      link.rel = "noreferrer noopener";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void host.openExternalUrl!(credit.href!);
+      });
       line.append(link);
     } else {
       line.textContent = credit.text;

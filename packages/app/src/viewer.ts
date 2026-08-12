@@ -1,7 +1,18 @@
 import { formatBytes, type FsNode } from "@fsn/core";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
-import type { Choice, ChoiceSpec, RendererId, ToggleSpec, ViewerHost, WindowFit } from "./viewers/types";
+import type {
+  Action,
+  ActionSpec,
+  Choice,
+  ChoiceSpec,
+  RendererId,
+  TextWriteOptions,
+  TextWriteResult,
+  ToggleSpec,
+  ViewerHost,
+  WindowFit,
+} from "./viewers/types";
 
 export type ViewerElements = {
   dialog: HTMLDialogElement;
@@ -23,8 +34,11 @@ export type ViewerElements = {
 export type ViewerIO = {
   read(node: FsNode, signal: AbortSignal): Promise<Blob>;
   directUrl(node: FsNode): string | null;
+  canOpenNative?: (node: FsNode) => boolean;
   openNative?: (node: FsNode) => Promise<void>;
-  writeText?: (node: FsNode, value: string) => Promise<void>;
+  openExternalUrl?: (url: string) => Promise<void>;
+  canWriteText?: (node: FsNode) => boolean;
+  writeText?: (node: FsNode, value: string, options?: TextWriteOptions) => Promise<TextWriteResult>;
 };
 
 /** The inline size a zoomed window returns to, plus the drag offset it had. */
@@ -64,12 +78,18 @@ export class FileViewer {
   /** Whether the size on the dialog came from a fit rather than from the reader's own hand. */
   private fitted = false;
   private fitFrame = 0;
+  private discardGuard: (() => boolean) | null = null;
 
   constructor(
     private readonly elements: ViewerElements,
     private readonly io: ViewerIO,
   ) {
-    elements.close.addEventListener("click", () => elements.dialog.close());
+    elements.close.addEventListener("click", () => {
+      if (this.canDiscard()) elements.dialog.close();
+    });
+    elements.dialog.addEventListener("cancel", (event) => {
+      if (!this.canDiscard()) event.preventDefault();
+    });
     // `close` is delivered asynchronously, so a dialog that has already been reopened
     // for the next object would otherwise be torn down by the previous one's event.
     elements.dialog.addEventListener("close", () => {
@@ -90,9 +110,15 @@ export class FileViewer {
       this.scheduleFit();
       this.applyGeometry();
     });
+    window.addEventListener("beforeunload", (event) => {
+      if (!this.discardGuard) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
   }
 
   async open(node: FsNode, path: string): Promise<void> {
+    if (this.elements.dialog.open && !this.canDiscard()) return;
     this.reset();
     // A size the last object asked for means nothing to this one; a size the reader
     // dragged out themselves is theirs to keep until they open something with an opinion.
@@ -113,6 +139,11 @@ export class FileViewer {
     await this.dispatch(rendererFor(node), node, path);
   }
 
+  /** Lets the host window consult the active renderer before it is destroyed. */
+  confirmDiscard(): boolean {
+    return this.canDiscard();
+  }
+
   private async dispatch(entry: ReturnType<typeof rendererFor>, node: FsNode, path: string): Promise<void> {
     const { signal } = this.controller;
     this.elements.position.textContent = "READING OBJECT…";
@@ -120,6 +151,7 @@ export class FileViewer {
     this.elements.tools.replaceChildren();
 
     try {
+      this.addPlatformActions(node, signal);
       const module = await entry.load();
       if (signal.aborted) return;
       await module.render(this.hostFor(node, path, signal));
@@ -147,8 +179,12 @@ export class FileViewer {
         return new Uint8Array(await slice.arrayBuffer());
       },
       text: async (limit = MAX_TEXT_BYTES) => {
+        if ((node.size ?? 0) > limit) throw new Error(`Object exceeds the ${formatBytes(limit)} terminal buffer.`);
         const source = await blob();
         if (source.size > limit) throw new Error(`Object exceeds the ${formatBytes(limit)} terminal buffer.`);
+        // Read-only structured viewers retain the browser's forgiving Blob.text()
+        // contract. Strict UTF-8 belongs only to the writable text editor, where
+        // replacement characters could otherwise be persisted over original bytes.
         return source.text();
       },
       url: async () => {
@@ -174,6 +210,18 @@ export class FileViewer {
       },
       addToggle: (spec) => this.addToggle(spec, signal),
       addChoice: (spec) => this.addChoice(spec, signal),
+      addAction: (spec) => this.addAction(spec, signal),
+      writeText: this.io.writeText && (this.io.canWriteText?.(node) ?? true)
+        ? async (value: string, options?: TextWriteOptions) => {
+            const result = await this.io.writeText!(node, value, options);
+            if (result.status === "saved") this.elements.size.textContent = formatBytes(result.size);
+            return result;
+          }
+        : undefined,
+      openExternalUrl: this.io.openExternalUrl,
+      setDiscardGuard: (guard) => {
+        if (!signal.aborted) this.discardGuard = guard;
+      },
       onCleanup: (dispose) => this.disposers.push(dispose),
       handOff: (id: RendererId) => {
         if (!signal.aborted) void this.dispatch(rendererById(id), node, path);
@@ -199,6 +247,65 @@ export class FileViewer {
       spec.onChange(on);
     });
     this.elements.tools.prepend(button);
+  }
+
+  private addAction(spec: ActionSpec, signal: AbortSignal): Action {
+    if (signal.aborted) return { setDisabled: () => undefined, setLabel: () => undefined };
+    const button = el("button", "tool-toggle", spec.label);
+    button.type = "button";
+    let requestedDisabled = false;
+    let busy = false;
+    const paintDisabled = (): void => {
+      button.disabled = busy || requestedDisabled;
+    };
+    if (spec.title) button.title = spec.title;
+    button.addEventListener("click", async () => {
+      if (button.disabled || signal.aborted) return;
+      busy = true;
+      paintDisabled();
+      try {
+        await spec.onActivate();
+      } catch (error) {
+        if (!signal.aborted) {
+          this.elements.position.textContent = error instanceof Error ? error.message : "ACTION FAILED";
+        }
+      } finally {
+        busy = false;
+        if (!signal.aborted) paintDisabled();
+      }
+    });
+    this.elements.tools.append(button);
+    return {
+      setDisabled: (disabled) => {
+        requestedDisabled = disabled;
+        paintDisabled();
+      },
+      setLabel: (label) => {
+        button.textContent = label;
+      },
+    };
+  }
+
+  private addPlatformActions(node: FsNode, signal: AbortSignal): void {
+    if (!this.io.openNative || !(this.io.canOpenNative?.(node) ?? true)) return;
+    this.addAction(
+      {
+        label: "OPEN IN NATIVE APP",
+        title: "Open this file in its default application",
+        onActivate: async () => {
+          this.elements.position.textContent = "OPENING NATIVE APPLICATION…";
+          try {
+            await this.io.openNative!(node);
+            if (!signal.aborted) this.elements.position.textContent = "OPENED IN NATIVE APPLICATION";
+          } catch (error) {
+            if (!signal.aborted) {
+              this.elements.position.textContent = error instanceof Error ? error.message : "NATIVE OPEN FAILED";
+            }
+          }
+        },
+      },
+      signal,
+    );
   }
 
   private startDrag(event: PointerEvent): void {
@@ -461,8 +568,13 @@ export class FileViewer {
     for (const url of this.objectUrls) URL.revokeObjectURL(url);
     this.objectUrls = [];
     this.payload = null;
+    this.discardGuard = null;
     this.elements.content.querySelectorAll("audio, video").forEach((element) => (element as HTMLMediaElement).pause());
     this.elements.tools.replaceChildren();
+  }
+
+  private canDiscard(): boolean {
+    return this.discardGuard?.() ?? true;
   }
 }
 

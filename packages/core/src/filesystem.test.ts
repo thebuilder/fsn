@@ -27,6 +27,20 @@ describe("filesystem utilities", () => {
     expect(categoryOf(file("release.zip"))).toBe("archive");
   });
 
+  it.each([
+    ["README.md", "document"],
+    ["guide.mdx", "code"],
+    ["workflow.yml", "code"],
+    ["compose.yaml", "code"],
+    ["Cargo.toml", "code"],
+    ["schema.graphql", "code"],
+    ["notebook.ipynb", "code"],
+    ["reference.markdown", "document"],
+    ["manual.rst", "document"],
+  ] as const)("classifies supported text format %s as %s", (name, category) => {
+    expect(categoryOf(file(name))).toBe(category);
+  });
+
   it("classifies files that carry their type in the name", () => {
     expect(categoryOf(file("Makefile"))).toBe("code");
     expect(categoryOf(file(".gitignore"))).toBe("code");
@@ -36,10 +50,16 @@ describe("filesystem utilities", () => {
   });
 
   it("only reads formats it can actually decode as text", () => {
-    expect(canReadAsText(file("notes.md"))).toBe(true);
-    expect(canReadAsText(file("Dockerfile"))).toBe(true);
-    expect(canReadAsText(file("archive.zip"))).toBe(false);
-    expect(canReadAsText(file("mystery.dat"))).toBe(false);
+    for (const name of [
+      "notes.md", "component.mdx", "workflow.yml", "compose.yaml", "Dockerfile", ".env.local", "Cargo.lock", "schema.avsc", "requests.http", "manual.adoc",
+    ]) {
+      expect(canReadAsText(file(name)), name).toBe(true);
+    }
+
+    for (const name of ["archive.zip", "document.docx", "database.sqlite", "module.wasm", "payload.pb", "process.lock", "registry.reg", "settings.plist", "source.map", "mystery.dat"]) {
+      expect(canReadAsText(file(name)), name).toBe(false);
+    }
+
     expect(canReadAsText(directory("src", []))).toBe(false);
   });
 

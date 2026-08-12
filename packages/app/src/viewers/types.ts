@@ -21,6 +21,23 @@ export type Choice = {
   select(id: string): void;
 };
 
+export type ActionSpec = {
+  label: string;
+  title?: string;
+  onActivate: () => void | Promise<void>;
+};
+
+export type Action = {
+  setDisabled(disabled: boolean): void;
+  setLabel(label: string): void;
+};
+
+export type TextWriteOptions = { force?: boolean };
+
+export type TextWriteResult =
+  | { status: "saved"; size: number; modified?: number }
+  | { status: "conflict" };
+
 /**
  * The shape a renderer would like its window to take. The host owns the arithmetic;
  * a renderer only describes the region it wants shown whole.
@@ -66,6 +83,13 @@ export type ViewerHost = {
   setStatus(label: string): void;
   addToggle(spec: ToggleSpec): void;
   addChoice(spec: ChoiceSpec): Choice;
+  addAction(spec: ActionSpec): Action;
+  /** Present only when the current platform explicitly allows text writes. */
+  writeText?: (value: string, options?: TextWriteOptions) => Promise<TextWriteResult>;
+  /** Host-owned external navigation; absent when the platform does not allow it. */
+  openExternalUrl?: (url: string) => Promise<void>;
+  /** Installs a synchronous guard while a renderer owns unsaved state. */
+  setDiscardGuard(guard: (() => boolean) | null): void;
   onCleanup(dispose: () => void): void;
   /** Hands the object to a different renderer, e.g. the denied screen's hex override. */
   handOff(rendererId: RendererId): void;

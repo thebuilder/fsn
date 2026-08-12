@@ -6,11 +6,19 @@
   "platforms": ["macOS", "windows", "linux"],
   "permissions": [
     "core:path:default",
-    "dialog:allow-open",
-    "fs:allow-read-dir",
-    "fs:allow-stat",
-    "fs:allow-read-file",
-    "fs:allow-write-text-file",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-destroy",
+    "allow-pick-root",
+    "allow-require-active-root",
+    "allow-clear-active-root",
+    "allow-read-dir-native",
+    "allow-stat-native",
+    "allow-read-file-native",
+    "allow-read-text-native",
+    "allow-write-text-atomic",
+    "allow-macos-quit-bridge-ready",
+    "allow-respond-to-macos-quit",
     "allow-open-native"
   ]
 }
