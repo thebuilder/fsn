@@ -152,22 +152,24 @@
               <path d="M0 0 L280 140 M0 140 L280 0" fill="none" stroke="#5bffd9" stroke-opacity=".48" stroke-width="1.4"/>
             </pattern>
           </defs>
-          <circle cx="210" cy="180" r="180" fill="url(#welcome-halo)"/>
-          <g mask="url(#welcome-floor-mask)">
+          <circle class="welcome-halo" cx="210" cy="180" r="180" fill="url(#welcome-halo)"/>
+          <g class="welcome-floor" mask="url(#welcome-floor-mask)">
             <rect width="420" height="300" fill="url(#welcome-grid-minor)"/>
             <rect width="420" height="300" fill="url(#welcome-grid-major)"/>
           </g>
-          <g>
-            <polygon points="187,49 210,60.5 210,178.5 187,167" fill="#358378"/><polygon points="210,60.5 233,49 233,167 210,178.5" fill="#23564f"/><polygon points="210,37.5 233,49 210,60.5 187,49" fill="#5ce1cf"/>
-            <polygon points="215,95 238,106.5 238,192.5 215,181" fill="#358378"/><polygon points="238,106.5 261,95 261,181 238,192.5" fill="#23564f"/><polygon points="238,83.5 261,95 238,106.5 215,95" fill="#5ce1cf"/>
-            <polygon points="159,87 182,98.5 182,192.5 159,181" fill="#516f94"/><polygon points="182,98.5 205,87 205,181 182,192.5" fill="#354961"/><polygon points="182,75.5 205,87 182,98.5 159,87" fill="#8bbfff"/>
-            <polygon points="187,131 210,142.5 210,206.5 187,195" fill="#358378"/><polygon points="210,142.5 233,131 233,195 210,206.5" fill="#23564f"/><polygon points="210,119.5 233,131 210,142.5 187,131" fill="#5ce1cf"/>
-            <polygon points="327,137 350,148.5 350,248.5 327,237" fill="#8c3149"/><polygon points="350,148.5 373,137 373,237 350,248.5" fill="#5c2030"/><polygon points="350,125.5 373,137 350,148.5 327,137" fill="#f2557e"/>
-            <polygon points="47,141 70,152.5 70,248.5 47,237" fill="#94570d"/><polygon points="70,152.5 93,141 93,237 70,248.5" fill="#613909"/><polygon points="70,129.5 93,141 70,152.5 47,141" fill="#ff9617"/>
-            <polygon points="355,179 378,190.5 378,262.5 355,251" fill="#8c3149"/><polygon points="378,190.5 401,179 401,251 378,262.5" fill="#5c2030"/><polygon points="378,167.5 401,179 378,190.5 355,179" fill="#f2557e"/>
-            <polygon points="299,171 322,182.5 322,262.5 299,251" fill="#8c3149"/><polygon points="322,182.5 345,171 345,251 322,262.5" fill="#5c2030"/><polygon points="322,159.5 345,171 322,182.5 299,171" fill="#f2557e"/>
-            <polygon points="75,183 98,194.5 98,262.5 75,251" fill="#94570d"/><polygon points="98,194.5 121,183 121,251 98,262.5" fill="#613909"/><polygon points="98,171.5 121,183 98,194.5 75,183" fill="#ff9617"/>
-            <polygon points="19,175 42,186.5 42,262.5 19,251" fill="#85813f"/><polygon points="42,186.5 65,175 65,251 42,262.5" fill="#575429"/><polygon points="42,163.5 65,175 42,186.5 19,175" fill="#e6de6d"/>
+          <!-- One group per column, ordered back to front: the reveal staggers down this
+               list, so the skyline builds away from the horizon rather than at random. -->
+          <g class="welcome-skyline">
+            <g class="welcome-column"><polygon points="187,49 210,60.5 210,178.5 187,167" fill="#358378"/><polygon points="210,60.5 233,49 233,167 210,178.5" fill="#23564f"/><polygon points="210,37.5 233,49 210,60.5 187,49" fill="#5ce1cf"/></g>
+            <g class="welcome-column"><polygon points="215,95 238,106.5 238,192.5 215,181" fill="#358378"/><polygon points="238,106.5 261,95 261,181 238,192.5" fill="#23564f"/><polygon points="238,83.5 261,95 238,106.5 215,95" fill="#5ce1cf"/></g>
+            <g class="welcome-column"><polygon points="159,87 182,98.5 182,192.5 159,181" fill="#516f94"/><polygon points="182,98.5 205,87 205,181 182,192.5" fill="#354961"/><polygon points="182,75.5 205,87 182,98.5 159,87" fill="#8bbfff"/></g>
+            <g class="welcome-column"><polygon points="187,131 210,142.5 210,206.5 187,195" fill="#358378"/><polygon points="210,142.5 233,131 233,195 210,206.5" fill="#23564f"/><polygon points="210,119.5 233,131 210,142.5 187,131" fill="#5ce1cf"/></g>
+            <g class="welcome-column"><polygon points="327,137 350,148.5 350,248.5 327,237" fill="#8c3149"/><polygon points="350,148.5 373,137 373,237 350,248.5" fill="#5c2030"/><polygon points="350,125.5 373,137 350,148.5 327,137" fill="#f2557e"/></g>
+            <g class="welcome-column"><polygon points="47,141 70,152.5 70,248.5 47,237" fill="#94570d"/><polygon points="70,152.5 93,141 93,237 70,248.5" fill="#613909"/><polygon points="70,129.5 93,141 70,152.5 47,141" fill="#ff9617"/></g>
+            <g class="welcome-column"><polygon points="355,179 378,190.5 378,262.5 355,251" fill="#8c3149"/><polygon points="378,190.5 401,179 401,251 378,262.5" fill="#5c2030"/><polygon points="378,167.5 401,179 378,190.5 355,179" fill="#f2557e"/></g>
+            <g class="welcome-column"><polygon points="299,171 322,182.5 322,262.5 299,251" fill="#8c3149"/><polygon points="322,182.5 345,171 345,251 322,262.5" fill="#5c2030"/><polygon points="322,159.5 345,171 322,182.5 299,171" fill="#f2557e"/></g>
+            <g class="welcome-column"><polygon points="75,183 98,194.5 98,262.5 75,251" fill="#94570d"/><polygon points="98,194.5 121,183 121,251 98,262.5" fill="#613909"/><polygon points="98,171.5 121,183 98,194.5 75,183" fill="#ff9617"/></g>
+            <g class="welcome-column"><polygon points="19,175 42,186.5 42,262.5 19,251" fill="#85813f"/><polygon points="42,186.5 65,175 65,251 42,262.5" fill="#575429"/><polygon points="42,163.5 65,175 42,186.5 19,175" fill="#e6de6d"/></g>
           </g>
         </svg>
       </div>

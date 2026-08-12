@@ -120,8 +120,33 @@ function renderChrome(): void {
   renderBreadcrumbs();
   if (renderedDirectoryId !== current.id) {
     renderedDirectoryId = current.id;
-    restartTitleTransition();
+    if (!welcomeHold) restartTitleTransition();
   }
+}
+
+/**
+ * Nothing behind the welcome screen moves while it is up — not the skyline, not the
+ * camera, not the headings that would otherwise have played their entrance to an
+ * audience of one blurred backdrop. Everything owed is banked and spent at once.
+ */
+let welcomeHold = false;
+
+function holdBehindWelcome(): void {
+  welcomeHold = true;
+  document.documentElement.dataset.world = "held";
+  world.holdReveal();
+}
+
+function releaseBehindWelcome(): void {
+  if (!welcomeHold) return;
+  welcomeHold = false;
+  delete document.documentElement.dataset.world;
+  world.releaseReveal();
+  // Forgetting the trail is what makes every crumb read as new, so the whole path
+  // draws itself in rather than appearing already written.
+  previousCrumbIds = [];
+  renderBreadcrumbs();
+  restartTitleTransition();
 }
 
 /** Replays the heading animation; the reflow is what lets it retrigger. */
@@ -188,7 +213,7 @@ function renderBreadcrumbs(): void {
     });
     // Animate crumbs that are genuinely new, plus the one that just became current
     // (so stepping back reads as a change rather than a silent restyle).
-    if (!previousCrumbIds.includes(node.id) || (isLeaf && previousLeaf !== node.id)) {
+    if (!welcomeHold && (!previousCrumbIds.includes(node.id) || (isLeaf && previousLeaf !== node.id))) {
       button.classList.add("is-entering");
       button.style.animationDelay = `${entering * 45}ms`;
       entering += 1;
@@ -590,9 +615,33 @@ welcomeDemo.addEventListener("click", () => welcomeDialog.close());
  * A folder mounted from inside the dialog has already recorded itself.
  */
 welcomeDialog.addEventListener("close", () => {
+  releaseWhenWelcomeHasGone();
   if (!filesystem.isLocal) void rememberSource({ mode: "demo" });
 });
+
 getElement<HTMLButtonElement>("welcome-folder").addEventListener("click", () => void chooseFolder());
+
+/**
+ * Waits for the screen to be gone rather than merely dismissed. Its backdrop is a
+ * full-viewport blur, the most expensive thing this page ever composites, and a camera
+ * that starts moving while that is still dissolving moves in dropped frames.
+ *
+ * The transition announces its own end, so this tracks the stylesheet instead of
+ * repeating its numbers. The timer is the failsafe for a close that never animates.
+ */
+function releaseWhenWelcomeHasGone(): void {
+  let failsafe = 0;
+  const release = (): void => {
+    window.clearTimeout(failsafe);
+    welcomeDialog.removeEventListener("transitionend", onDialogTransitionEnd);
+    releaseBehindWelcome();
+  };
+  const onDialogTransitionEnd = (event: TransitionEvent): void => {
+    if (event.target === welcomeDialog && event.propertyName === "opacity") release();
+  };
+  welcomeDialog.addEventListener("transitionend", onDialogTransitionEnd);
+  failsafe = window.setTimeout(release, 400);
+}
 
 window.addEventListener("keydown", (event) => {
   // Camera movement keys are owned by WorldScene; it reports back via onKeyboardNavigation.
@@ -665,25 +714,42 @@ async function settleInitialView(): Promise<boolean> {
     // no offer to make: the demo comes up behind the welcome screen instead.
     if (await mountRememberedDirectory(last.handle)) return false;
   }
-  await renderDirectory(false, "initial");
-  return last?.mode !== "demo";
+  // Everything from here earns the welcome screen, so the world it is covering holds
+  // its reveal until the screen is gone. Whatever is mounted from inside the dialog
+  // is held too: the hold outlives this render and lifts when the dialog closes.
+  //
+  // Which is also the only thing that lifts it. A render that never finishes is a
+  // welcome screen that never opens, and a skyline left flat with no way to raise it.
+  const owed = last?.mode !== "demo";
+  if (owed) holdBehindWelcome();
+  try {
+    await renderDirectory(false, "initial");
+  } catch (error) {
+    releaseBehindWelcome();
+    throw error;
+  }
+  return owed;
 }
 
 /**
- * Reveals the interface once, in the right order: the settled world first, then the
- * welcome screen a beat later if one is still owed, so the heading is not caught
- * animating in behind a backdrop that is blurring it at the same time.
+ * Reveals the interface once. When a welcome screen is owed it opens in the same frame,
+ * so the two arrive as one event rather than as an interface fading up from black and
+ * then a dialog landing on top of it. The beat that used to separate them was there to
+ * keep the heading from animating in under a backdrop that was blurring it; the heading
+ * no longer animates at all until the screen is gone, so there is nothing left to
+ * protect and the pause had become the thing worth removing.
  *
  * The race is the concession to big directories — reading a few thousand entries is
  * slower than anyone should stare at a black page for, so the demo backdrop comes up
- * on time and the real folder lands in it when it is ready.
+ * on time and the real folder lands in it when it is ready. That is also the one case
+ * where the two can still separate, and getting on screen matters more there.
  */
 async function start(): Promise<void> {
   const settled = settleInitialView();
   await Promise.race([settled, wait(600)]);
   document.documentElement.dataset.boot = "ready";
+  // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
   if (!(await settled)) return;
-  await wait(140);
   welcomeDialog.showModal();
 }
 
