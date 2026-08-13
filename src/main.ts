@@ -50,6 +50,7 @@ const detailsList = getElement<HTMLElement>("details-list");
 const enterButton = getElement<HTMLButtonElement>("enter-button");
 const hoverLabel = getElement<HTMLElement>("hover-label");
 const reticle = getElement<HTMLElement>("reticle");
+const controls = getElement<HTMLElement>("controls");
 const status = getElement<HTMLElement>("status");
 const folderButton = getElement<HTMLButtonElement>("folder-button");
 const folderFallback = getElement<HTMLInputElement>("folder-fallback");
@@ -92,6 +93,7 @@ const world = new WorldScene(canvas, {
   onHover: updateHover,
   onAim: updateAim,
   onKeyboardNavigation: (active) => reticle.classList.toggle("is-keyboard-active", active),
+  onSwapKeys: (swapped) => controls.classList.toggle("is-swapped", swapped),
   onEnterArea: adoptArea,
 });
 

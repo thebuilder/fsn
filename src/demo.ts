@@ -53,7 +53,7 @@ export function createDemoFilesystem(): FilesystemRoot {
         file("coordinates.log", 1_840, 2, "NORTH PLATFORM: 58.334 / -2.104\nEAST PLATFORM: 58.339 / -2.091\nSIGNAL: NOMINAL\nARCHIVE LINK: DEGRADED"),
         photo("velociraptor.webp", 242_676, 0),
       ]),
-      file("README.txt", 12_840, 1, "FILE SYSTEM NAVIGATOR / OPERATOR'S NOTES\n\nWelcome to FSN.\n\n• Drag to orbit the filesystem.\n• Scroll to move through the scene.\n• Select an object to inspect it.\n• Double-click a directory to enter it.\n• Press Backspace to return to the parent.\n\nAll local files remain on your machine."),
+      file("README.txt", 12_840, 1, "FILE SYSTEM NAVIGATOR / OPERATOR'S NOTES\n\nWelcome to FSN.\n\n• Drag to orbit the filesystem.\n• Scroll to move through the scene.\n• Fly with W A S D, turn with the arrows; Alt swaps the two.\n• Select an object to inspect it.\n• Double-click, or double-tap, a directory to enter it.\n• Press Backspace to return to the parent.\n\nAll local files remain on your machine."),
       file("project-brief.md", 32_100, 4, "# Project FSN\n\nA spatial interface for exploring ordinary files as an electric city.\n\n## Principles\n\n1. One directory is one navigable district.\n2. The layout is deterministic.\n3. The browser remains read-only.\n4. Useful information lives in HTML; spectacle lives in WebGL."),
       file("budget-1996.csv", 8_600, 9, "CATEGORY,Q1,Q2,Q3,Q4\nHardware,4200,1800,600,900\nSoftware,350,420,215,610\nMedia,1200,700,880,1500\nNetwork,240,240,240,240"),
       file("classified.dat", 48_000_000, 40),

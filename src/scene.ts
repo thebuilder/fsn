@@ -8,6 +8,8 @@ type SceneCallbacks = {
   onHover: (node: FsNode | null, x: number, y: number) => void;
   onAim: (node: FsNode | null) => void;
   onKeyboardNavigation: (active: boolean) => void;
+  /** Alt is down: the fly and turn key clusters have traded jobs. */
+  onSwapKeys: (swapped: boolean) => void;
   /** The camera flew into a directory the user had already visited. */
   onEnterArea: (directoryId: string) => void;
 };
@@ -186,13 +188,29 @@ const LABEL_BUILDS_PER_TICK = 4;
 const LABEL_CACHE_LIMIT = 128;
 const EASE_LABEL = 0.000004;
 
-const MOVE_CODES = new Set([
-  "KeyW", "KeyA", "KeyS", "KeyD",
-  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-  "KeyR", "KeyF",
-]);
+const MOVE_CODES = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyR", "KeyF"]);
+/**
+ * The arrows turn rather than strafe. WASD already translates, so aliasing them was
+ * spare, and without these the keyboard has no way at all to change where the camera
+ * looks — every heading change needed a drag. Alt swaps the two clusters, so a hand
+ * that would rather not leave WASD can turn from there, and one that has settled on
+ * the arrows can still fly.
+ */
+const TURN_CODES = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 const BASE_SPEED = 20;
 const BOOST_MULTIPLIER = 3.5;
+const TURN_SPEED = 1.5;
+const TURN_BOOST = 2;
+/** Keeps a turn off both poles, where the offset has no azimuth left to rotate. */
+const TURN_POLAR_MARGIN = 0.02;
+
+/** A finger may drift this far, in CSS pixels, and still have meant to stand still. */
+const TAP_SLOP = 12;
+/** Longer than this is a press, not a tap, however still the finger was held. */
+const TAP_HOLD_LIMIT = 500;
+const DOUBLE_TAP_WINDOW = 400;
+/** How far apart the two taps of a pair may land, in CSS pixels. */
+const DOUBLE_TAP_RADIUS = 36;
 
 /** Reveal: each object rises over INTRO_RISE, staggered outwards across INTRO_STAGGER. */
 const INTRO_RISE = 420;
@@ -535,6 +553,11 @@ export class WorldScene {
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GRID_Y);
   private readonly movement = new Set<string>();
   private readonly velocity = new THREE.Vector3();
+  /** x is yaw, y is pitch, both in radians per second. */
+  private readonly turnVelocity = new THREE.Vector2();
+  private tapCandidate: { id: number; x: number; y: number; time: number } | null = null;
+  private lastTap: { x: number; y: number; time: number } | null = null;
+  private lastTapActivate = 0;
   private currentArea: DirectoryArea | null = null;
   private flight: CameraFlight | null = null;
   private intro: AreaIntro | null = null;
@@ -543,6 +566,8 @@ export class WorldScene {
   private aimed: Placement | null = null;
   private keyboardNavigationActive = false;
   private boosting = false;
+  /** Alt held: the fly keys point the camera and the arrows drive it, each other's job. */
+  private swapped = false;
   private lastAimCheck = 0;
   private frame = 0;
   private pendingArea: DirectoryArea | null = null;
@@ -634,6 +659,8 @@ export class WorldScene {
 
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
+    this.canvas.addEventListener("pointerup", this.onPointerUp);
+    this.canvas.addEventListener("pointercancel", this.onPointerCancel);
     // Captured on the window, which is the only place that reliably runs before the
     // controls' own listener on the canvas: handing the controls back first is what
     // lets the gesture that ends the establishing shot also orbit, rather than being
@@ -1241,6 +1268,13 @@ export class WorldScene {
     return this.aimed?.node ?? null;
   }
 
+  /** Announced rather than read, so the on-screen legend can say what the keys do now. */
+  private setSwapped(swapped: boolean): void {
+    if (this.swapped === swapped) return;
+    this.swapped = swapped;
+    this.callbacks.onSwapKeys(swapped);
+  }
+
   setKeyboardNavigationActive(active: boolean): void {
     if (this.keyboardNavigationActive !== active) {
       this.keyboardNavigationActive = active;
@@ -1450,14 +1484,64 @@ export class WorldScene {
 
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
+    // A second finger is a pinch or a two-finger pan, and neither is half of a tap; it
+    // arrives non-primary, which also drops any tap the first finger had going. Asking
+    // the browser rather than counting pointers ourselves means a pointerup lost to a
+    // gesture the browser swallowed cannot leave taps broken until the next reload.
+    this.tapCandidate = event.isPrimary && event.pointerType !== "mouse"
+      ? { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp }
+      : null;
     this.setKeyboardNavigationActive(false);
     this.canvas.focus({ preventScroll: true });
     const hit = this.hitTest(event.clientX, event.clientY);
     if (hit) this.selectPlacement(hit);
   };
 
+  /**
+   * Recognises a double tap by hand. Touch browsers do not agree on `dblclick`: iOS
+   * never sends one, and where it does arrive it is late and easily lost to the pan
+   * gesture, so the second tap has to be spotted from the pointer stream itself.
+   */
+  private onPointerUp = (event: PointerEvent): void => {
+    const candidate = this.tapCandidate;
+    this.tapCandidate = null;
+    // Nothing under a finger stays hovered once the finger is gone; there is no cursor
+    // left to justify the lift, and the label would sit there over empty ground.
+    if (event.pointerType !== "mouse" && this.hoverTarget) {
+      this.hovered = null;
+      this.hoverTarget = null;
+      this.callbacks.onHover(null, event.clientX, event.clientY);
+    }
+    if (!candidate || candidate.id !== event.pointerId) return;
+    if (event.timeStamp - candidate.time > TAP_HOLD_LIMIT) return;
+    if (Math.hypot(event.clientX - candidate.x, event.clientY - candidate.y) > TAP_SLOP) return;
+
+    const previous = this.lastTap;
+    this.lastTap = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+    if (!previous || event.timeStamp - previous.time > DOUBLE_TAP_WINDOW) return;
+    if (Math.hypot(event.clientX - previous.x, event.clientY - previous.y) > DOUBLE_TAP_RADIUS) return;
+    // A pair is spent once it fires, so a third tap opens a fresh one rather than
+    // making every tap after the first count as another double.
+    this.lastTap = null;
+    this.lastTapActivate = event.timeStamp;
+    this.activateAt(event.clientX, event.clientY);
+  };
+
+  private onPointerCancel = (event: PointerEvent): void => {
+    if (this.tapCandidate?.id === event.pointerId) this.tapCandidate = null;
+  };
+
   private onDoubleClick = (event: MouseEvent): void => {
-    const hit = this.hitTest(event.clientX, event.clientY);
+    // Some touch browsers do synthesise a dblclick, arriving after the taps it was
+    // built from have already been acted on. Opening the same thing twice is at best
+    // a wasted flight, so the synthetic one is dropped.
+    if (event.timeStamp - this.lastTapActivate < DOUBLE_TAP_WINDOW * 2) return;
+    this.activateAt(event.clientX, event.clientY);
+  };
+
+  /** Opens whatever is under the point, or travels there if that is bare ground. */
+  private activateAt(clientX: number, clientY: number): void {
+    const hit = this.hitTest(clientX, clientY);
     if (hit) {
       this.callbacks.onOpen(hit.node);
       return;
@@ -1469,10 +1553,11 @@ export class WorldScene {
     const offset = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
     destination.y = 1.2;
     this.flyTo(destination, destination.clone().add(offset));
-  };
+  }
 
   private onKeyDown = (event: KeyboardEvent): void => {
     this.boosting = event.shiftKey;
+    this.setSwapped(event.altKey);
     // While a command key is down macOS withholds keyup for everything else, so a
     // movement key let go during a shortcut would never be removed and the camera
     // would fly on forever. Treat the modifier going down as releasing the lot.
@@ -1485,7 +1570,7 @@ export class WorldScene {
       this.releaseMovement();
       return;
     }
-    if (!MOVE_CODES.has(event.code)) return;
+    if (!MOVE_CODES.has(event.code) && !TURN_CODES.has(event.code)) return;
     event.preventDefault();
     this.setKeyboardNavigationActive(true);
     this.movement.add(event.code);
@@ -1494,6 +1579,7 @@ export class WorldScene {
 
   private onKeyUp = (event: KeyboardEvent): void => {
     this.boosting = event.shiftKey;
+    this.setSwapped(event.altKey);
     // Anything released during a Cmd/Ctrl chord reported no keyup of its own, so the
     // modifier's release is the first moment the set can be trusted again.
     if (event.key === "Meta" || event.key === "Control") {
@@ -1511,6 +1597,7 @@ export class WorldScene {
   private releaseMovement = (): void => {
     this.movement.clear();
     this.boosting = false;
+    this.setSwapped(false);
   };
 
   private resize = (): void => {
@@ -1529,10 +1616,12 @@ export class WorldScene {
       forward.y = 0;
       forward.normalize();
       const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
-      if (this.movement.has("KeyW") || this.movement.has("ArrowUp")) desired.add(forward);
-      if (this.movement.has("KeyS") || this.movement.has("ArrowDown")) desired.sub(forward);
-      if (this.movement.has("KeyD") || this.movement.has("ArrowRight")) desired.add(right);
-      if (this.movement.has("KeyA") || this.movement.has("ArrowLeft")) desired.sub(right);
+      // Alt swaps the two clusters outright, so whichever one is not turning is here.
+      const held = (fly: string, arrow: string): boolean => this.movement.has(this.swapped ? arrow : fly);
+      if (held("KeyW", "ArrowUp")) desired.add(forward);
+      if (held("KeyS", "ArrowDown")) desired.sub(forward);
+      if (held("KeyD", "ArrowRight")) desired.add(right);
+      if (held("KeyA", "ArrowLeft")) desired.sub(right);
       if (this.movement.has("KeyR")) desired.y += 1;
       if (this.movement.has("KeyF")) desired.y -= 1;
       if (desired.lengthSq()) {
@@ -1550,12 +1639,48 @@ export class WorldScene {
     this.controls.target.add(step);
   }
 
+  /**
+   * Swings the view by walking the orbit target around a camera that stays put — the
+   * keyboard's only way to change heading, since the controls read the pose back off
+   * these two points every frame. Driven by the arrows, or by the fly keys while Alt
+   * has the two clusters swapped.
+   */
+  private updateTurn(delta: number): void {
+    let yaw = 0;
+    let pitch = 0;
+    const held = (arrow: string, fly: string): boolean => this.movement.has(this.swapped ? fly : arrow);
+    if (held("ArrowLeft", "KeyA")) yaw += 1;
+    if (held("ArrowRight", "KeyD")) yaw -= 1;
+    if (held("ArrowUp", "KeyW")) pitch += 1;
+    if (held("ArrowDown", "KeyS")) pitch -= 1;
+    const rate = TURN_SPEED * (this.boosting ? TURN_BOOST : 1);
+    // The same ease the fly keys have, so starting and stopping a turn has weight too.
+    const step = 1 - Math.pow(0.0016, delta);
+    this.turnVelocity.x += (yaw * rate - this.turnVelocity.x) * step;
+    this.turnVelocity.y += (pitch * rate - this.turnVelocity.y) * step;
+    if (this.turnVelocity.lengthSq() < 1e-6) {
+      this.turnVelocity.set(0, 0);
+      return;
+    }
+
+    turnTarget(
+      this.camera.position,
+      this.controls.target,
+      this.turnVelocity.x * delta,
+      this.turnVelocity.y * delta,
+      this.controls.minPolarAngle,
+      this.controls.maxPolarAngle,
+    );
+  }
+
   private animate = (): void => {
     const delta = Math.min(this.clock.getDelta(), 0.05);
     // A held reveal keeps its opening frame: the flight stays parked at its wide pose
     // and the towers stay flat until whatever is covering them gets out of the way.
-    if (!this.flight) this.updateMovement(delta);
-    else if (!this.revealHeld) this.advanceFlight();
+    if (!this.flight) {
+      this.updateTurn(delta);
+      this.updateMovement(delta);
+    } else if (!this.revealHeld) this.advanceFlight();
 
     this.updateActivation(delta);
     if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
@@ -1599,6 +1724,38 @@ export class WorldScene {
     this.disposeWorld();
     this.renderer.dispose();
   }
+}
+
+const TURN_OFFSET = new THREE.Vector3();
+const TURN_SPHERICAL = new THREE.Spherical();
+
+/**
+ * Rotates `target` about a camera that stays where it is, by `yaw` and `pitch` radians,
+ * and writes the result back into `target`.
+ *
+ * Pitch is held inside the same polar band a drag is held to — a positive pitch lays the
+ * offset flatter, which raises the target towards the camera's own height, and from
+ * behind the lens that reads as tilting up. Past the band the controls would snap the
+ * camera on their next update, so the turn stops where a drag would.
+ */
+export function turnTarget(
+  cameraPosition: THREE.Vector3,
+  target: THREE.Vector3,
+  yaw: number,
+  pitch: number,
+  minPolarAngle: number,
+  maxPolarAngle: number,
+): THREE.Vector3 {
+  TURN_OFFSET.subVectors(cameraPosition, target);
+  TURN_SPHERICAL.setFromVector3(TURN_OFFSET);
+  TURN_SPHERICAL.theta += yaw;
+  TURN_SPHERICAL.phi = THREE.MathUtils.clamp(
+    TURN_SPHERICAL.phi + pitch,
+    minPolarAngle + TURN_POLAR_MARGIN,
+    maxPolarAngle - TURN_POLAR_MARGIN,
+  );
+  TURN_OFFSET.setFromSpherical(TURN_SPHERICAL);
+  return target.subVectors(cameraPosition, TURN_OFFSET);
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
