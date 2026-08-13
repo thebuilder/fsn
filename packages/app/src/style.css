@@ -507,7 +507,10 @@
   /* Overrides any width/height the grow box has written inline, so zooming always fills. */
   .file-viewer.is-maximized { width: calc(100vw - 1rem) !important; height: calc(100dvh - 1rem) !important; }
   .file-viewer[open] { animation: viewer-in 180ms steps(4, end); }
-  .viewer-window { position: relative; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 3px double #263d38; background: #b6c4be; }
+  /* The single column is floored at zero rather than left `auto`: an auto track is at
+     least as wide as its widest row's min-content, so one long unbroken path in the
+     toolbar would hold the whole frame open and spill it out of the window it lines. */
+  .viewer-window { position: relative; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); border: 3px double #263d38; background: #b6c4be; }
   /* The pinstripes are the window-chrome texture; each control sits on a solid plate
      so no stripe ever runs through a button or the file name. Equal flexible columns
      either side centre the name in the bar itself, not in the space the controls leave. */

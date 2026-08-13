@@ -40,7 +40,8 @@ export type TextWriteResult =
 
 /**
  * The shape a renderer would like its window to take. The host owns the arithmetic;
- * a renderer only describes the region it wants shown whole.
+ * a renderer only describes the region it wants shown whole. A window only reshapes
+ * for an object it cannot already show whole — see `maxWidth`.
  */
 export type WindowFit = {
   /** Width ÷ height of that region — an image's pixels, a video's frame, a page. */
@@ -51,7 +52,13 @@ export type WindowFit = {
    * up exactly as large as the region plus its furniture.
    */
   region?: HTMLElement;
-  /** Largest useful width for the region, so a 64px icon does not get a 1000px window. */
+  /**
+   * The object's own width in pixels, when it has one. Two jobs: an object already
+   * smaller than the region it was given is left alone in the window it opened in,
+   * and a tall narrow object is never given a window wider than the object itself.
+   * Omitted by renderers whose content has no natural size, such as a PDF page, which
+   * therefore always take their shape from the aspect.
+   */
   maxWidth?: number;
   /**
    * Whether the window may give up width to keep the aspect once the viewport has
