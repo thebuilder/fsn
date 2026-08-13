@@ -74,8 +74,13 @@ function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerH
   const surface = new THREE.MeshStandardMaterial({ color: PHOSPHOR, roughness: 0.45, metalness: 0.15, flatShading: true });
   const wire = new THREE.MeshBasicMaterial({ color: 0xc8fff0, wireframe: true, transparent: true, opacity: 0.55 });
   const meshes: THREE.Mesh[] = [];
+  // Loader-produced materials (and any embedded GLB textures they hold) are about to be
+  // discarded in favour of the shared phosphor surface; collect them so cleanup can free
+  // what three.js's own garbage collector never will.
+  const replaced: THREE.Material[] = [];
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+    replaced.push(...(Array.isArray(child.material) ? child.material : [child.material]));
     child.material = surface;
     meshes.push(child);
   });
@@ -178,6 +183,7 @@ function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerH
     cancelAnimationFrame(animation);
     observer.disconnect();
     dispose(object);
+    replaced.forEach(disposeMaterialDeep);
     surface.dispose();
     wire.dispose();
     grid.geometry.dispose();
@@ -202,4 +208,12 @@ function dispose(object: THREE.Object3D): void {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh) child.geometry.dispose();
   });
+}
+
+/** Frees a material and every texture it references, not just the common `map` slot. */
+function disposeMaterialDeep(material: THREE.Material): void {
+  for (const value of Object.values(material)) {
+    if (value instanceof THREE.Texture) value.dispose();
+  }
+  material.dispose();
 }

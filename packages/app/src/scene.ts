@@ -554,6 +554,14 @@ export class WorldScene {
   private readonly pickMeshes = new Map<THREE.InstancedMesh, Placement[]>();
   private readonly selectionBox: THREE.LineSegments;
   private readonly aimBox: THREE.LineSegments;
+  /** Shared by selectionBox and aimBox; EdgesGeometry copies what it needs from unitBox. */
+  private readonly outlineGeometry: THREE.EdgesGeometry;
+  private readonly selectionMaterial: THREE.LineBasicMaterial;
+  private readonly aimMaterial: THREE.LineBasicMaterial;
+  /** Every per-area mesh shares this unit cube, scaled per instance; disposeWorld must not free it. */
+  private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
+  /** One glow canvas per scene instance, reused by every area's beacon. */
+  private readonly glowTexture = createGlowTexture();
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -658,11 +666,13 @@ export class WorldScene {
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
 
-    const outlineGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-    this.selectionBox = new THREE.LineSegments(outlineGeometry, new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 }));
+    this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
+    this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
+    this.selectionBox = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
-    this.aimBox = new THREE.LineSegments(outlineGeometry, new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 }));
+    this.aimMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 });
+    this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
 
@@ -731,7 +741,7 @@ export class WorldScene {
     const rimMaterial = new THREE.MeshLambertMaterial({ color: RIM_COLOR, emissive: RIM_COLOR, emissiveIntensity: 0.1 });
     rememberActiveLook(rimMaterial);
     materials.push(rimMaterial);
-    const rim = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), rimMaterial);
+    const rim = new THREE.Mesh(this.unitBox, rimMaterial);
     rim.scale.set(layout.groundWidth + RIM_OVERHANG * 2, RIM_HEIGHT, layout.groundDepth + RIM_OVERHANG * 2);
     rim.position.set(center.x, GROUND_Y - GROUND_HEIGHT / 2 - RIM_HEIGHT / 2, center.z);
     group.add(rim);
@@ -739,7 +749,7 @@ export class WorldScene {
     const groundMaterial = new THREE.MeshLambertMaterial({ color: GROUND_COLOR, emissive: GROUND_COLOR, emissiveIntensity: 0.16 });
     rememberActiveLook(groundMaterial);
     materials.push(groundMaterial);
-    const ground = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), groundMaterial);
+    const ground = new THREE.Mesh(this.unitBox, groundMaterial);
     ground.scale.set(layout.groundWidth, GROUND_HEIGHT, layout.groundDepth);
     ground.position.set(center.x, GROUND_Y, center.z);
     ground.receiveShadow = true;
@@ -766,7 +776,7 @@ export class WorldScene {
       });
       rememberActiveLook(buildingMaterial);
       materials.push(buildingMaterial);
-      const buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), buildingMaterial, categoryPlacements.length);
+      const buildingMesh = new THREE.InstancedMesh(this.unitBox, buildingMaterial, categoryPlacements.length);
       buildingMesh.castShadow = true;
       buildingMesh.receiveShadow = true;
       categoryPlacements.forEach((placement, index) => {
@@ -805,7 +815,7 @@ export class WorldScene {
       });
       rememberActiveLook(markerMaterial);
       materials.push(markerMaterial);
-      const markerMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), markerMaterial, markers.length);
+      const markerMesh = new THREE.InstancedMesh(this.unitBox, markerMaterial, markers.length);
       markerMesh.castShadow = true;
       markers.forEach((decor, index) => {
         matrix.compose(decor.position, NO_ROTATION, decor.scale);
@@ -826,7 +836,7 @@ export class WorldScene {
 
     const beaconSize = Math.max(48, layout.radius * 2.4);
     const beacon = new THREE.Mesh(new THREE.PlaneGeometry(beaconSize, beaconSize), new THREE.MeshBasicMaterial({
-      map: createGlowTexture(),
+      map: this.glowTexture,
       color: 0x68ffda,
       transparent: true,
       opacity: 0.16,
@@ -1377,10 +1387,11 @@ export class WorldScene {
       if (!object) continue;
       object.traverse((descendant) => {
         if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
-        descendant.geometry?.dispose();
+        if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
         const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
         materials.forEach((material) => {
-          if (material instanceof THREE.SpriteMaterial) material.map?.dispose();
+          const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
+          if (map && map !== this.glowTexture) map.dispose();
           material.dispose();
         });
       });
@@ -1732,6 +1743,21 @@ export class WorldScene {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.disposeWorld();
+    // Environment and outline resources live outside worldGroup, so disposeWorld never
+    // reaches them; everything per-scene-instance is freed here, shared resources last.
+    this.grid.geometry.dispose();
+    this.gridMaterial.dispose();
+    this.sky.traverse((descendant) => {
+      if (!(descendant instanceof THREE.Points)) return;
+      descendant.geometry.dispose();
+      const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
+      materials.forEach((material) => material.dispose());
+    });
+    this.outlineGeometry.dispose();
+    this.selectionMaterial.dispose();
+    this.aimMaterial.dispose();
+    this.unitBox.dispose();
+    this.glowTexture.dispose();
     this.renderer.dispose();
   }
 }
