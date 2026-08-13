@@ -157,11 +157,32 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   return peek;
 }
 
+/** Resolves file metadata a pool at a time: one slow handle stalls its slot, not the directory. */
+async function fillFileMetadata(pending: { node: FsNode; handle: FileSystemFileHandle }[]): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < pending.length) {
+      const { node, handle } = pending[next];
+      next += 1;
+      try {
+        const file = await handle.getFile();
+        node.resource = registerResource(node.id, { kind: "file", file }, true);
+        node.size = file.size;
+        node.modified = file.lastModified;
+      } catch {
+        // Metadata can be denied independently; the node remains navigable.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(16, pending.length) }, worker));
+}
+
 async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
   const children: FsNode[] = [];
   const handle = directoryHandleFor(parent);
   if (!handle) return children;
   const directory = handle as DirectoryHandleWithEntries;
+  const pending: { node: FsNode; handle: FileSystemFileHandle }[] = [];
   for await (const [name, childHandle] of directory.entries()) {
     const id = `${parent.id}/${encodeURIComponent(name)}`;
     const node: FsNode = {
@@ -178,17 +199,11 @@ async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
       ),
     };
     if (childHandle.kind === "file") {
-      try {
-        const file = await (childHandle as FileSystemFileHandle).getFile();
-        node.resource = registerResource(id, { kind: "file", file }, true);
-        node.size = file.size;
-        node.modified = file.lastModified;
-      } catch {
-        // Metadata can be denied independently; the node remains navigable.
-      }
+      pending.push({ node, handle: childHandle as FileSystemFileHandle });
     }
     children.push(node);
   }
+  await fillFileMetadata(pending);
   return sortNodes(children);
 }
 
