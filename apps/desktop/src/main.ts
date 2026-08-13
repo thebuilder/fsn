@@ -186,10 +186,20 @@ if (isTauri()) {
 
 async function installNativeLifecycle(): Promise<() => void> {
   const unlistenQuit = await listen<{ requestId: number }>("fsn://quit-requested", (event) => {
-    void invoke("respond_to_macos_quit", {
-      requestId: event.payload.requestId,
-      confirmed: navigator.requestClose(),
-    });
+    void (async () => {
+      const requestId = event.payload.requestId;
+      let confirmed = false;
+      try {
+        confirmed = navigator.requestClose();
+      } catch (error) {
+        console.error("Quit guard failed; refusing the quit to protect unsaved work.", error);
+      }
+      try {
+        await invoke("respond_to_macos_quit", { requestId, confirmed });
+      } catch (error) {
+        console.error("The quit response could not reach the backend.", error);
+      }
+    })();
   });
   try {
     const unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
