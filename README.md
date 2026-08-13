@@ -1,3 +1,5 @@
+<img src="apps/desktop/src-tauri/icons/128x128@2x.png" alt="FSN icon" width="128" height="128" />
+
 # FSN: 3D File System Navigator
 
 A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a deterministic WebGL city. The web app is read-only; the Tauri desktop app can edit UTF-8 text and open files in their native application.
