@@ -1,4 +1,6 @@
-<img src="apps/desktop/src-tauri/icons/128x128@2x.png" alt="FSN icon" width="128" height="128" />
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/128x128@2x.png" alt="FSN icon" width="128" height="128" />
+</p>
 
 # FSN: 3D File System Navigator
 
