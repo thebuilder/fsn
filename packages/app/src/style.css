@@ -522,14 +522,45 @@
      the dot inside it stays the small period-correct square. */
   .traffic-lights { justify-self: start; display: flex; gap: 0.05rem; padding: 0.2rem; }
   .light { width: 1.45rem; height: 1.45rem; display: grid; place-items: center; padding: 0; background: none; cursor: pointer; }
-  .light i { width: 0.72rem; height: 0.72rem; display: grid; place-items: center; border: 1px solid #2b443e; color: transparent; font: 700 0.52rem/1 var(--mono); font-style: normal; }
+  /**
+   * The marks are drawn rather than typeset. They used to be an ×, an en dash and a +
+   * centred as text, which centres the line box and not the ink: each of the three
+   * carries its own side bearings and sits at its own height above the baseline, so
+   * the three landed at three different offsets and none of them was the middle. And
+   * `--mono` is a stack of whatever the machine happens to have, so which offsets
+   * those were changed from reader to reader. Bars inset symmetrically from the
+   * plate's own edges are centred by construction, in any font, at any size.
+   */
+  .light i { position: relative; width: 0.72rem; height: 0.72rem; display: block; border: 1px solid #2b443e; color: transparent; }
+  /* One bar draws the collapse dash; the close and zoom marks each add a second. The
+     matched half-pixel insets are what leave the bar its one-pixel thickness, and they
+     leave it centred whatever fractional height the plate itself works out to. */
+  .light i::before, .light-close i::after, .light-zoom i::after { position: absolute; inset: calc(50% - 0.5px) 12%; content: ""; background: currentColor; }
+  /* Longer, because a turned bar spans only its own length over root two on each axis;
+     at the dash's length the cross would read a size smaller than the other two. Not
+     as long as it could be: a cross reaching as wide as the dash covers more of the
+     plate than the dash does, and starts to read as the heaviest of the three. */
+  .light-close i::before, .light-close i::after { inset: calc(50% - 0.5px) 8%; }
+  .light-close i::before { transform: rotate(45deg); }
+  .light-close i::after { transform: rotate(-45deg); }
+  .light-zoom i::after { inset: 12% calc(50% - 0.5px); }
   .light-close i { background: #ff5d7f; }
   .light-collapse i { background: #ffd45d; }
   .light-zoom i { background: #68d9b4; }
   .traffic-lights:hover i, .light:focus-visible i { color: rgba(9, 22, 19, .72); }
   .light:active i { filter: brightness(.82); }
-  /* Shrink-to-fit and centred, so the stripes stay visible either side of the name plate. */
-  .viewer-title-wrap { justify-self: center; max-width: 100%; min-width: 0; display: grid; justify-items: center; gap: 0.2rem; padding: 0.2rem 0.75rem; }
+  /* The close box every reader already knows, on the edge they already reach for. It is
+     always drawn, not revealed on hover like the lights: the one control in the bar that
+     has to be findable without hunting. Inheriting the plate from the rule above keeps
+     the pinstripes from running through it. */
+  .viewer-dismiss { grid-column: 3; justify-self: end; width: 1.85rem; height: 1.85rem; display: grid; place-items: center; padding: 0; color: #3d5a52; cursor: pointer; }
+  .viewer-dismiss svg { width: 0.8rem; height: 0.8rem; fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .viewer-dismiss:hover { color: #0d1c19; }
+  .viewer-dismiss:active { color: var(--signal-soft); }
+  /* Shrink-to-fit and centred, so the stripes stay visible either side of the name plate.
+     Placed by hand rather than by auto-flow: the lights leave the bar entirely on a phone,
+     and auto-placement would slide the name and the X down a column each behind them. */
+  .viewer-title-wrap { grid-column: 2; justify-self: center; max-width: 100%; min-width: 0; display: grid; justify-items: center; gap: 0.2rem; padding: 0.2rem 0.75rem; }
   .viewer-title-wrap span { color: #38544d; font: 700 0.48rem/1 var(--mono); letter-spacing: .12em; }
   .viewer-title-wrap h2 { max-width: 100%; overflow: hidden; margin: 0; font: 700 0.82rem/1.25 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
   /* Classic grow box: it overlaps the frame in the bottom-right corner. */
@@ -816,6 +847,15 @@
   /* Dynamic units, not 100vh: a phone browser's own bars are inside the large viewport,
      so a window sized against that hangs off both ends of the screen. */
   .file-viewer { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; }
+  /* A window that is already the whole screen cannot be zoomed, and rolling it up to a
+     title bar with nothing under it is a state with no way back on a phone. That leaves
+     the lights with one working control between them, and it is the one the X on the
+     other edge already is — so the cluster goes and the X carries the bar alone. */
+  .traffic-lights { display: none; }
+  /* Out to a finger's worth now that it is the only control in the bar, and the mark
+     grows with it — the lights it replaces were never sized for a thumb. */
+  .viewer-dismiss { width: 2.75rem; height: 2.75rem; }
+  .viewer-dismiss svg { width: 1.05rem; height: 1.05rem; }
   .viewer-toolbar { align-items: start; flex-direction: column; gap: .4rem; }
   .viewer-toolbar > div { width: 100%; justify-content: space-between; }
   .access-denied { padding: 1.5rem; }

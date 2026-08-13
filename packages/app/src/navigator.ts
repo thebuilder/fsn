@@ -86,7 +86,7 @@ const viewer = new FileViewer(
     zoom: getElement<HTMLButtonElement>("viewer-zoom"),
     collapse: getElement<HTMLButtonElement>("viewer-collapse"),
     grow: getElement<HTMLButtonElement>("viewer-grow"),
-    close: getElement<HTMLButtonElement>("viewer-close"),
+    close: [getElement<HTMLButtonElement>("viewer-close"), getElement<HTMLButtonElement>("viewer-dismiss")],
   },
   platform.viewer,
 );

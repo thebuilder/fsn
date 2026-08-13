@@ -229,15 +229,20 @@
 <dialog class="file-viewer" id="file-viewer" aria-labelledby="viewer-title">
   <div class="viewer-window">
     <header class="viewer-titlebar" id="viewer-titlebar">
+      <!-- The marks inside the lights are drawn by the stylesheet, not typeset: see the
+           note on `.light i` for why a glyph will not sit still at this size. -->
       <div class="traffic-lights">
-        <button class="light light-close" id="viewer-close" type="button" title="Close" aria-label="Close window"><i aria-hidden="true">×</i></button>
-        <button class="light light-collapse" id="viewer-collapse" type="button" title="Collapse" aria-pressed="false" aria-label="Collapse window"><i aria-hidden="true">–</i></button>
-        <button class="light light-zoom" id="viewer-zoom" type="button" title="Maximize" aria-pressed="false" aria-label="Maximize window"><i aria-hidden="true">+</i></button>
+        <button class="light light-close" id="viewer-close" type="button" title="Close" aria-label="Close window"><i aria-hidden="true"></i></button>
+        <button class="light light-collapse" id="viewer-collapse" type="button" title="Collapse" aria-pressed="false" aria-label="Collapse window"><i aria-hidden="true"></i></button>
+        <button class="light light-zoom" id="viewer-zoom" type="button" title="Maximize" aria-pressed="false" aria-label="Maximize window"><i aria-hidden="true"></i></button>
       </div>
       <div class="viewer-title-wrap">
         <span id="viewer-mode">OBJECT VIEWER</span>
         <h2 id="viewer-title">Untitled</h2>
       </div>
+      <button class="viewer-dismiss" id="viewer-dismiss" type="button" title="Close" aria-label="Close window">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
+      </button>
     </header>
     <div class="viewer-toolbar">
       <span id="viewer-path">/</span>
