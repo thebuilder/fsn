@@ -476,6 +476,11 @@ export class FileViewer {
     if (!fit || !dialog.open || this.maximized || this.collapsed) return;
     // A full-screen viewer has no window to shape, and an inline size would break out of it.
     if (window.matchMedia(FULLSCREEN_WINDOW).matches) return;
+    // Only an object the window cannot already show whole is worth reshaping for. A
+    // 256px token fits the pane it opened in with room to spare, and pulling the frame
+    // down to the token's own size would shrink the window to fit the stamp — so it is
+    // simply centred in the window it was given, and a size the reader chose survives.
+    if (this.fits(fit)) return;
 
     // Measure from the stylesheet's own size, so repeated fits do not compound.
     this.clearSize();
@@ -504,6 +509,21 @@ export class FileViewer {
     dialog.style.width = `${Math.round(width)}px`;
     dialog.style.height = `${Math.round(height)}px`;
     this.fitted = true;
+  }
+
+  /**
+   * Whether the region as it stands is already big enough for the object inside it.
+   * Only an object that declares its own width can answer this; one that has none —
+   * a PDF page — has nothing to be too large for, and always takes its shape. A region
+   * measuring zero belongs to a window that has not been laid out, which is not an
+   * answer, so it falls through to the fit and its own measurement guard.
+   */
+  private fits(fit: WindowFit): boolean {
+    const region = fit.region;
+    if (!region || fit.maxWidth === undefined || !(fit.aspect > 0)) return false;
+    const width = region.clientWidth;
+    const height = region.clientHeight;
+    return width > 0 && height > 0 && fit.maxWidth <= width && fit.maxWidth / fit.aspect <= height;
   }
 
   private clearSize(): void {
