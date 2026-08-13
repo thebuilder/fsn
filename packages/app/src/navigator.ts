@@ -248,7 +248,10 @@ async function renderDirectory(
     } finally {
       settle();
     }
-    if (generation !== renderGeneration || lifecycle.signal.aborted) return;
+    // The camera may have adopted a different directory while the peeks were in flight,
+    // which bumps the generation but can also leave it unchanged if nothing else rendered
+    // meanwhile — so the identity check catches what the counter alone might miss.
+    if (generation !== renderGeneration || lifecycle.signal.aborted || currentDirectory().id !== current.id) return;
   }
 
   if (lifecycle.signal.aborted) return;
@@ -269,6 +272,10 @@ async function renderDirectory(
 function adoptArea(directoryId: string): void {
   const trail = ancestryById.get(directoryId);
   if (!trail || trail[trail.length - 1].id === currentDirectory().id) return;
+  // An in-flight renderDirectory for the directory the camera has just left must not be
+  // allowed to win the world back once its peeks resolve; bumping the generation here
+  // invalidates it before this function hands the camera's chosen directory to the chrome.
+  renderGeneration += 1;
   ancestry = [...trail];
   syncRoute("push");
   renderChrome();
