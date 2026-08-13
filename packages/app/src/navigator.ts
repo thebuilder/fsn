@@ -52,6 +52,7 @@ const status = getElement<HTMLElement>("status");
 const folderButton = getElement<HTMLButtonElement>("folder-button");
 const folderFallback = getElement<HTMLInputElement>("folder-fallback");
 const demoButton = getElement<HTMLButtonElement>("demo-button");
+const refreshButton = getElement<HTMLButtonElement>("refresh-button");
 const searchButton = getElement<HTMLButtonElement>("search-button");
 const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
@@ -413,6 +414,49 @@ function goToRoot(): void {
   }
   ancestry = [ancestry[0]];
   void renderDirectory(true, "backward");
+}
+
+/**
+ * Re-lists the directory the camera is standing in, so a folder that changed on disk
+ * since it was last read — a download landing, a build emitting artifacts — catches up
+ * without leaving it. The demo is generated once and never drifts, so it declines with
+ * a status line instead of pretending to have re-read anything.
+ *
+ * Clearing the cached listing and evicting the built district before re-reading is what
+ * makes this a real re-list rather than a redraw of what was already known: the world
+ * rebuild that follows replays the district's reveal, which is the intended feedback
+ * that something changed underfoot.
+ */
+async function refreshDirectory(): Promise<void> {
+  if (lifecycle.signal.aborted) return;
+  const current = currentDirectory();
+  if (!filesystem.isLocal) {
+    setStatus("The demo filesystem is fixed in time.");
+    return;
+  }
+  current.children = undefined;
+  current.peek = undefined;
+  world.invalidateArea(current.id);
+  updateSelection(null);
+  refreshButton.disabled = true;
+  const settle = beginPending();
+  try {
+    await platform.ensureChildren(current);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : `Unable to re-read ${current.name}`, true);
+    return;
+  } finally {
+    settle();
+    refreshButton.disabled = false;
+  }
+  // The camera may have left this directory while the re-read was in flight; a render
+  // for a directory nobody is standing in anymore would only fight whatever navigated
+  // it away.
+  if (lifecycle.signal.aborted || currentDirectory().id !== current.id) return;
+  // "keep": this redraws where we already are, so the address bar has nothing new to
+  // say and no history entry is owed for it.
+  await renderDirectory(false, "backward", "keep");
+  if (!status.classList.contains("is-error")) setStatus(`Re-read ${current.name}`);
 }
 
 /**
@@ -802,6 +846,7 @@ demoButton.addEventListener("click", () => {
   })();
 }, listener);
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
+refreshButton.addEventListener("click", () => void refreshDirectory(), listener);
 searchButton.addEventListener("click", openSearch, listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
 searchInput.addEventListener("input", scheduleSearchRender, listener);

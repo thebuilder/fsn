@@ -294,6 +294,14 @@ export class WorldScene {
   private revealHeld = false;
   private hovered: FsNode | null = null;
   private aimed: Placement | null = null;
+  private selected: Placement | null = null;
+  /**
+   * The world position an area held the instant it was surgically evicted, kept just
+   * long enough for the area that replaces it to claim the same spot. Consumed once:
+   * `setDirectory` reads and clears it, so a directory opened fresh later never
+   * inherits a stale center meant for a different visit.
+   */
+  private invalidatedCenter: { id: string; center: THREE.Vector3 } | null = null;
   private keyboardNavigationActive = false;
   private boosting = false;
   /** Alt held: the fly keys point the camera and the arrows drive it, each other's job. */
@@ -425,7 +433,11 @@ export class WorldScene {
     let isNew = false;
     if (!area) {
       const layout = buildLayout(nodes);
-      const center = direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius);
+      // A directory just surgically evicted by `invalidateArea` rebuilds exactly where
+      // it stood, not wherever `findAreaCenter` would otherwise place a fresh arrival.
+      const reclaimed = this.invalidatedCenter?.id === directory.id ? this.invalidatedCenter.center : null;
+      this.invalidatedCenter = null;
+      const center = reclaimed ?? (direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius));
       area = this.createArea(directory.id, center, layout);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
@@ -439,6 +451,50 @@ export class WorldScene {
     // one is navigation, and travels at the pace the person is already moving at.
     this.flyToArea(area, direction === "initial" ? "establish" : "travel");
     this.clearSelectionAndAim();
+  }
+
+  /**
+   * Surgically forgets one directory's built geometry, so the next `setDirectory` call
+   * for the same id reads as a fresh arrival and rebuilds it from scratch. Every other
+   * area in the world is untouched — this is the opposite of `disposeWorld`, which
+   * tears the whole scene down.
+   *
+   * The evicted area's center is banked in `invalidatedCenter` so the rebuild lands
+   * exactly where this one stood rather than being placed anew relative to whatever
+   * `findAreaCenter` would otherwise consider "current".
+   */
+  invalidateArea(directoryId: string): void {
+    const area = this.areas.get(directoryId);
+    if (!area) return;
+
+    area.pickMeshes.forEach((_placements, mesh) => this.pickMeshes.delete(mesh));
+    this.disposeAreaObjects(area.group);
+    this.worldGroup.remove(area.group);
+    this.areas.delete(directoryId);
+    this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
+
+    if (this.intro?.area === area) this.intro = null;
+    if (this.pendingArea === area) this.pendingArea = null;
+    if (this.currentArea === area) this.currentArea = null;
+    if (this.hoverTarget && area.placements.includes(this.hoverTarget)) this.hoverTarget = null;
+    if (this.hoverShown && area.placements.includes(this.hoverShown)) {
+      this.hoverShown = null;
+      this.hoverStrength = 0;
+    }
+    if (this.hovered && area.placements.some((placement) => placement.node.id === this.hovered?.id)) {
+      this.hovered = null;
+      this.callbacks.onHover(null, 0, 0);
+    }
+    if (this.aimed && area.placements.includes(this.aimed)) {
+      this.aimed = null;
+      this.aimBox.visible = false;
+      this.callbacks.onAim(null);
+    }
+    if (this.selected && area.placements.includes(this.selected)) {
+      this.selected = null;
+      this.selectionBox.visible = false;
+      this.callbacks.onSelect(null);
+    }
   }
 
   private createArea(id: string, center: THREE.Vector3, layout: AreaLayout): DirectoryArea {
@@ -751,6 +807,7 @@ export class WorldScene {
 
   private clearSelectionAndAim(): void {
     this.selectionBox.visible = false;
+    this.selected = null;
     this.aimed = null;
     this.aimBox.visible = false;
     this.callbacks.onAim(null);
@@ -1103,17 +1160,28 @@ export class WorldScene {
     while (this.worldGroup.children.length) {
       const object = this.worldGroup.children.pop();
       if (!object) continue;
-      object.traverse((descendant) => {
-        if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
-        if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
-        const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
-        materials.forEach((material) => {
-          const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
-          if (map && map !== this.glowTexture) map.dispose();
-          material.dispose();
-        });
-      });
+      this.disposeAreaObjects(object);
     }
+  }
+
+  /**
+   * Frees every mesh/line/sprite geometry and material under `object`, respecting the
+   * resources shared across every area: `unitBox` (every plot and marker instances it)
+   * and `glowTexture` (every area's beacon reuses the one canvas). Shared by
+   * `disposeWorld`, which tears down the whole scene, and `invalidateArea`, which frees
+   * a single area's group without touching any other.
+   */
+  private disposeAreaObjects(object: THREE.Object3D): void {
+    object.traverse((descendant) => {
+      if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
+      if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
+      const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
+      materials.forEach((material) => {
+        const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
+        if (map && map !== this.glowTexture) map.dispose();
+        material.dispose();
+      });
+    });
   }
 
   private hitTest(clientX: number, clientY: number): Placement | null {
@@ -1202,6 +1270,7 @@ export class WorldScene {
   }
 
   private selectPlacement(placement: Placement): void {
+    this.selected = placement;
     this.selectionBox.visible = true;
     this.selectionBox.position.copy(placement.outlinePosition);
     this.selectionBox.scale.copy(placement.outlineScale).multiplyScalar(1.06);
