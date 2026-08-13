@@ -17,7 +17,7 @@ export async function render(host: ViewerHost): Promise<void> {
   host.mount(sheetTable(sheet));
   const separator = SEPARATOR_NAMES.get(delimiter) ?? "CUSTOM";
   host.setStatus(
-    `${sheet.totalRows} ROWS / ${sheet.columns} COLS / ${separator}${sheet.truncated ? ` / FIRST ${sheet.rows.length} SHOWN` : ""}`,
+    `${sheet.totalRows} ROWS / ${sheet.columns} COLS / ${separator}${sheet.truncated ? ` / FIRST ${sheet.rows.length} SHOWN` : ""}${sheet.columnsTruncated ? ` / FIRST ${sheet.columns} COLS SHOWN` : ""}`,
   );
 }
 

@@ -36,6 +36,21 @@ describe("delimited parser", () => {
     expect(delimiterFor("report.tsv", "a,b,c")).toBe("\t");
     expect(delimiterFor("quoted.csv", '"a;b",c')).toBe(",");
   });
+
+  it("clamps a row wider than maxColumns and flags the clamp", () => {
+    const wideRow = ",".repeat(600);
+    const sheet = parseDelimited(`h\n${wideRow}\n`, ",");
+
+    expect(sheet.columns).toBe(512);
+    expect(sheet.columnsTruncated).toBe(true);
+  });
+
+  it("leaves a normal sheet's column count alone", () => {
+    const sheet = parseDelimited("a,b,c\n1,2,3\n", ",");
+
+    expect(sheet.columns).toBe(3);
+    expect(sheet.columnsTruncated).toBe(false);
+  });
 });
 
 describe("hex dump", () => {
