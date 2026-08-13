@@ -12,6 +12,7 @@ import {
 } from "@fsn/core";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
+import { dismissOnOutsidePress } from "./light-dismiss";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
 import { readRoute, routeFor, sameRoute } from "./route";
 import { WorldScene, type NavigationDirection } from "./scene";
@@ -304,6 +305,9 @@ function renderBreadcrumbs(): void {
 
 function updateSelection(node: FsNode | null): void {
   selectedNode = node;
+  // Something being selected changes what the foot of a small screen is for: the panel
+  // is the answer to the tap, and the strip that was standing under it stands down.
+  document.documentElement.toggleAttribute("data-selection", Boolean(node));
   if (!node) {
     detailsKind.textContent = "NO SELECTION";
     detailsTitle.textContent = "Select an object";
@@ -767,6 +771,9 @@ demoButton.addEventListener("click", () => {
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
 searchButton.addEventListener("click", openSearch, listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
+// Escape is the desktop way out of these, and pressing the page behind them is the
+// same gesture for a hand that has no Escape key to reach for.
+[searchDialog, helpDialog, welcomeDialog].forEach((dialog) => dismissOnOutsidePress(dialog, listener));
 searchInput.addEventListener("input", () => renderSearchResults(searchInput.value), listener);
 searchDialog.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -982,6 +989,7 @@ return {
   destroy: () => {
     if (destroyPromise) return destroyPromise;
     lifecycle.abort();
+    document.documentElement.removeAttribute("data-selection");
     sourceTransition.invalidate();
     renderGeneration += 1;
     viewer.destroy();

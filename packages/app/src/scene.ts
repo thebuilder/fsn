@@ -558,6 +558,11 @@ export class WorldScene {
   /** x is yaw, y is pitch, both in radians per second. */
   private readonly turnVelocity = new THREE.Vector2();
   private tapCandidate: { id: number; x: number; y: number; time: number } | null = null;
+  /**
+   * Where the primary pointer went down, of whatever kind. A press that comes back up
+   * near where it started is a click; one that travels is the camera being moved.
+   */
+  private pressCandidate: { id: number; x: number; y: number } | null = null;
   private lastTap: { x: number; y: number; time: number } | null = null;
   private lastTapActivate = 0;
   private currentArea: DirectoryArea | null = null;
@@ -1010,6 +1015,13 @@ export class WorldScene {
       }
       area.materials.forEach((material) => applyAreaLook(material, area.activation));
     });
+  }
+
+  /** Puts the selection down and leaves the aim alone; that one belongs to the keyboard. */
+  private clearSelection(): void {
+    if (!this.selectionBox.visible) return;
+    this.selectionBox.visible = false;
+    this.callbacks.onSelect(null);
   }
 
   private clearSelectionAndAim(): void {
@@ -1495,6 +1507,7 @@ export class WorldScene {
     this.tapCandidate = event.isPrimary && event.pointerType !== "mouse"
       ? { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp }
       : null;
+    this.pressCandidate = event.isPrimary ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
     this.setKeyboardNavigationActive(false);
     this.canvas.focus({ preventScroll: true });
     const hit = this.hitTest(event.clientX, event.clientY);
@@ -1508,13 +1521,26 @@ export class WorldScene {
    */
   private onPointerUp = (event: PointerEvent): void => {
     const candidate = this.tapCandidate;
+    const press = this.pressCandidate;
     this.tapCandidate = null;
+    this.pressCandidate = null;
     // Nothing under a finger stays hovered once the finger is gone; there is no cursor
     // left to justify the lift, and the label would sit there over empty ground.
     if (event.pointerType !== "mouse" && this.hoverTarget) {
       this.hovered = null;
       this.hoverTarget = null;
       this.callbacks.onHover(null, event.clientX, event.clientY);
+    }
+    // Empty ground is what a selection is put down on. It is decided here rather than on
+    // the way down, because the same press begun on nothing is also how the camera is
+    // orbited, and a view being turned is not a choice being unmade.
+    if (
+      press
+      && press.id === event.pointerId
+      && Math.hypot(event.clientX - press.x, event.clientY - press.y) <= TAP_SLOP
+      && !this.hitTest(event.clientX, event.clientY)
+    ) {
+      this.clearSelection();
     }
     if (!candidate || candidate.id !== event.pointerId) return;
     if (event.timeStamp - candidate.time > TAP_HOLD_LIMIT) return;
@@ -1533,6 +1559,7 @@ export class WorldScene {
 
   private onPointerCancel = (event: PointerEvent): void => {
     if (this.tapCandidate?.id === event.pointerId) this.tapCandidate = null;
+    if (this.pressCandidate?.id === event.pointerId) this.pressCandidate = null;
   };
 
   private onDoubleClick = (event: MouseEvent): void => {
