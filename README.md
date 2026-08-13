@@ -36,8 +36,17 @@ FSN is a pnpm workspace with two deliberately separate application shells:
 - Use `W`, `A`, `S`, `D` or the arrow keys to move.
 - Click an object to inspect it; double-click a directory to enter it.
 - Press `Backspace` to return to the parent.
+- In the browser, back and forward retrace the directories you entered, and the address bar names the one you are in, so a reload returns to it.
 - Press `/` or `Cmd/Ctrl + K` to search the current directory.
 - Open objects in old-school viewer windows. Unknown or executable objects produce an access-denied screen, with a `FORCE HEX DUMP` override.
+
+## The address
+
+The directory you are in is written into the location fragment — `#/Macintosh HD/Documents/Field Notes` — so entering one is a history entry, back and forward walk the directories you walked, and a reload lands where you left off. A restored address is walked one level at a time, reading each, since a fresh tab has read nothing below the root; an address naming a directory that has since gone lands as deep as it still can and corrects itself.
+
+It is a fragment rather than a path because that is what it honestly is: a place inside the one page there has ever been, not a resource a server could return. Nothing has to be rewritten to serve it — not on the host, not in the Tauri asset protocol — and there remains a single canonical URL.
+
+The names are relative to whichever source is mounted, so an address is not a link anyone else can follow: it means something only alongside the folder this browser has already been granted. When a remembered folder comes back needing a click to re-grant it, the address is left naming that folder until it is mounted, so reloading again still restores the same place.
 
 ## Object viewers
 
@@ -93,6 +102,8 @@ since a buffer of silence meeting live audio puts a vertical cliff across the ro
 ## Local files and privacy
 
 The **Open folder** control uses the File System Access API where available. Other browsers fall back to a `webkitdirectory` directory snapshot. Neither mode uploads filenames, metadata, or file contents; all rendering and previewing happens in the browser. The application never writes to selected files.
+
+The address holds directory names from the folder you opened. A fragment is never sent with a request, but analytics reports whatever `location.href` says, so a `beforeSend` hook cuts the fragment off every event before it is sent. There is one page and every address is a view of it, so the measurement loses nothing.
 
 The desktop app asks Tauri for access only to a directory selected through the native picker. A Rust-owned active-root capability validates every native filesystem command; choosing another folder or returning to the demo revokes the old root. There is no static home-directory or global filesystem scope.
 

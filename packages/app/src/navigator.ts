@@ -13,6 +13,7 @@ import {
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
+import { readRoute, routeFor, sameRoute } from "./route";
 import { WorldScene, type NavigationDirection } from "./scene";
 import { FileViewer } from "./viewer";
 
@@ -64,6 +65,7 @@ const helpButton = getElement<HTMLButtonElement>("help-button");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
 const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
+const brandHome = getElement<HTMLAnchorElement>("brand-home");
 
 // The hidden FileList fallback is a browser-only escape hatch. Keeping it focusable
 // in the native shell would expose an inert control to keyboard and screen-reader users.
@@ -116,11 +118,43 @@ function currentChildren(): FsNode[] {
 const ancestryById = new Map<string, FsNode[]>();
 let renderedDirectoryId: string | null = null;
 
+/**
+ * What a directory change owes the address bar.
+ *
+ * `push` is the ordinary case, and the point of the whole arrangement: one directory
+ * entered is one entry to come back through. `replace` is for arriving somewhere without
+ * having gone anywhere — mounting a source, or correcting an address that named a
+ * directory which is no longer there. `keep` is for the changes the address bar caused,
+ * which must not be written back as new history, and for the one moment it is holding
+ * something more useful than where we are.
+ */
+type RouteIntent = "push" | "replace" | "keep";
+
+/**
+ * The address this page was opened with, held until a source that can answer to it is
+ * mounted. That is rarely the first thing drawn: a lapsed folder grant is offered from
+ * the toolbar rather than restored, so the directory named here can be one click away.
+ */
+let pendingRoute = readRoute(window.location.hash);
+
+function syncRoute(intent: RouteIntent): void {
+  if (intent === "keep") return;
+  // Going somewhere deliberately answers the opening address, whether or not it was the
+  // place asked for. Nothing later is allowed to drag a mounted source back to it.
+  if (intent === "push") pendingRoute = [];
+  const names = ancestry.map((node) => node.name);
+  if (sameRoute(names, readRoute(window.location.hash))) return;
+  const url = routeFor(names);
+  if (intent === "push") window.history.pushState(null, "", url);
+  else window.history.replaceState(null, "", url);
+}
+
 /** Updates every panel outside the 3D view. Never touches the camera. */
 function renderChrome(): void {
   const current = currentDirectory();
   const children = currentChildren();
   ancestryById.set(current.id, [...ancestry]);
+  brandHome.href = routeFor([filesystem.root.name]);
   sourceLabel.textContent = filesystem.sourceLabel;
   directoryTitle.textContent = current.name;
   const directories = children.filter((node) => node.kind === "directory").length;
@@ -190,8 +224,13 @@ function beginPending(): () => void {
 /** Guards against a slow peek from an abandoned directory landing after a newer one. */
 let renderGeneration = 0;
 
-async function renderDirectory(announce = true, direction: NavigationDirection = "backward"): Promise<void> {
+async function renderDirectory(
+  announce = true,
+  direction: NavigationDirection = "backward",
+  route: RouteIntent = "push",
+): Promise<void> {
   if (lifecycle.signal.aborted) return;
+  syncRoute(route);
   renderChrome();
   const generation = (renderGeneration += 1);
   const current = currentDirectory();
@@ -223,6 +262,7 @@ function adoptArea(directoryId: string): void {
   const trail = ancestryById.get(directoryId);
   if (!trail || trail[trail.length - 1].id === currentDirectory().id) return;
   ancestry = [...trail];
+  syncRoute("push");
   renderChrome();
   updateSelection(null);
   setStatus(`Entered ${currentDirectory().name}`);
@@ -356,6 +396,73 @@ function goToRoot(): void {
 }
 
 /**
+ * Walks a source down to the directory a route names, reading each level on the way.
+ *
+ * Nothing below the root has been read when a fresh tab is restored into a deep address,
+ * so this is a readdir per segment rather than a lookup. It stops at the first name that
+ * is not a directory here and returns how far it got: an address that has gone stale
+ * lands as close to where it pointed as the source still allows.
+ */
+async function resolveRoute(source: FilesystemRoot, names: string[]): Promise<FsNode[]> {
+  const chain = [source.root];
+  if (names[0] !== source.root.name) return chain;
+  for (const name of names.slice(1)) {
+    let children: FsNode[];
+    try {
+      children = await platform.ensureChildren(chain[chain.length - 1]);
+    } catch {
+      break;
+    }
+    const next = children.find((node) => node.kind === "directory" && node.name === name);
+    if (!next) break;
+    chain.push(next);
+  }
+  return chain;
+}
+
+/** Guards against a slow walk from an abandoned address landing after a newer one. */
+let routeGeneration = 0;
+
+/** Travels to wherever the address bar now points, without writing history back. */
+async function applyRoute(names: string[]): Promise<void> {
+  const generation = (routeGeneration += 1);
+  const settle = beginPending();
+  let chain: FsNode[];
+  try {
+    chain = await resolveRoute(filesystem, names);
+  } finally {
+    settle();
+  }
+  if (generation !== routeGeneration || lifecycle.signal.aborted) return;
+  // An address only partly resolved is an address that lies about where we are.
+  const intent: RouteIntent = chain.length === names.length ? "keep" : "replace";
+  const destination = chain[chain.length - 1];
+  if (destination.id === currentDirectory().id) {
+    syncRoute(intent);
+    return;
+  }
+  const direction: NavigationDirection = chain.length > ancestry.length ? "forward" : "backward";
+  ancestry = chain;
+  await renderDirectory(true, direction, intent);
+}
+
+/**
+ * Takes the address the page was opened with, if it names a path inside this source.
+ *
+ * Consumed by the first source that answers to it, since the folder named in the address
+ * is the one being restored: once it is back, the address has done its work. Anything
+ * else mounted first — the demo standing in behind a welcome screen, a folder waiting on
+ * a click — leaves the claim untouched for whatever comes after it.
+ */
+async function claimPendingRoute(source: FilesystemRoot): Promise<FsNode[] | null> {
+  if (pendingRoute.length < 2 || pendingRoute[0] !== source.root.name) return null;
+  const wanted = pendingRoute;
+  pendingRoute = [];
+  const chain = await resolveRoute(source, wanted);
+  return chain.length > 1 ? chain : null;
+}
+
+/**
  * `announcement` replaces the standard mount line for arrivals that need explaining.
  * Resolves once the world is drawn, which is what the boot sequence waits on.
  */
@@ -364,10 +471,14 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
     if (next !== filesystem) await sourceTransition.dispose(next);
     return false;
   }
+  // Walking to a restored address belongs with the rest of the preparation, so a source
+  // that arrives deep arrives already deep: one world built, in the right place.
+  let landing: FsNode[] | null = null;
   return sourceTransition.replace(
     next,
     async (candidate) => {
       await platform.ensureChildren(candidate.root);
+      landing = await claimPendingRoute(candidate);
       if (lifecycle.signal.aborted) sourceTransition.invalidate();
     },
     (candidate) => {
@@ -376,9 +487,9 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
       if (lifecycle.signal.aborted || !viewer.close()) return { status: "rejected" };
       const previous = filesystem;
       filesystem = candidate;
-      ancestry = [candidate.root];
+      ancestry = landing ?? [candidate.root];
       ancestryById.clear();
-      const drawn = renderDirectory(!announcement, "initial");
+      const drawn = renderDirectory(!announcement, "initial", "replace");
       if (announcement) setStatus(announcement);
       return { status: "activated", previous, settled: drawn };
     },
@@ -691,7 +802,11 @@ folderFallback.addEventListener("change", () => {
   }
   folderFallback.value = "";
 }, listener);
-getElement<HTMLAnchorElement>("brand-home").addEventListener("click", (event) => {
+// The mark carries the root's own address, so opening it in a new tab lands there
+// rather than following a bare `#`. Handled here when it is an ordinary click, since
+// going home also recentres the camera when it is already the directory we are in.
+brandHome.addEventListener("click", (event) => {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
   event.preventDefault();
   goToRoot();
 }, listener);
@@ -783,6 +898,13 @@ window.addEventListener("pointerdown", (event) => {
   if (event.button === 0) world.setKeyboardNavigationActive(false);
 }, listener);
 
+// Back and forward are directory navigation. `popstate` covers every traversal of the
+// entries this page wrote; `hashchange` covers an address typed or edited by hand, which
+// writes no entry of ours to traverse. A browser that fires both for one step arrives
+// twice at the same directory, and the second arrival has nothing left to do.
+window.addEventListener("popstate", () => void applyRoute(readRoute(window.location.hash)), listener);
+window.addEventListener("hashchange", () => void applyRoute(readRoute(window.location.hash)), listener);
+
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -799,7 +921,10 @@ async function settleInitialView(): Promise<boolean> {
   const last = await platform.recallSource();
   if (last.mode === "filesystem" && (await mountRememberedDirectory(last))) return false;
   if (last.mode === "reopen") {
-    await renderDirectory(false, "initial");
+    // The address still names the folder the toolbar is offering, and it is wanted again
+    // if this page is reloaded before that button is pressed. The demo standing in behind
+    // it has not been navigated to and does not get to overwrite where we were.
+    await renderDirectory(false, "initial", "keep");
     offerRememberedDirectory(last);
     return false;
   }
@@ -815,7 +940,11 @@ async function settleInitialView(): Promise<boolean> {
   const owed = last.mode !== "demo";
   if (owed) holdBehindWelcome();
   try {
-    await renderDirectory(false, "initial");
+    // The demo is a real source with real directories, so an address into it is restored
+    // like any other. This one is already mounted, so the walk happens here.
+    const landing = await claimPendingRoute(filesystem);
+    if (landing) ancestry = landing;
+    await renderDirectory(false, "initial", "replace");
   } catch (error) {
     releaseBehindWelcome();
     throw error;

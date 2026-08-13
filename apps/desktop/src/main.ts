@@ -159,6 +159,9 @@ const welcomeCopy = document.querySelector<HTMLElement>(".welcome-copy > p:not(.
 if (welcomeCopy) welcomeCopy.textContent = "Fly through a generated file system now, or open a folder on this device. Files stay local, and edits happen only when you press Save.";
 const welcomePrivacy = document.getElementById("welcome-privacy");
 if (welcomePrivacy) welcomePrivacy.textContent = "Local access. Changes are written only when you press Save.";
+// Directory history is kept here too, but this shell has no address bar to read it and
+// no back/forward gestures to walk it, so the row of the manual describing them goes.
+document.getElementById("help-history")?.remove();
 const viewerChannel = document.getElementById("viewer-channel");
 if (viewerChannel) viewerChannel.replaceChildren(Object.assign(document.createElement("i"), { className: "viewer-led" }), " LOCAL DESKTOP CHANNEL");
 
