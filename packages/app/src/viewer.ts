@@ -181,6 +181,11 @@ export class FileViewer {
   }
 
   private async dispatch(entry: ReturnType<typeof rendererFor>, node: FsNode, path: string): Promise<void> {
+    // A hand-off (denied → hex dump) calls dispatch directly, without going through
+    // open()'s reset(): the outgoing renderer's disposers and object URLs would
+    // otherwise survive into the next one. This is a no-op the ordinary way in, since
+    // open() has already released everything and left nothing for it to find.
+    this.releaseRenderer();
     const { signal } = this.controller;
     this.elements.position.textContent = "READING OBJECT…";
     this.elements.content.replaceChildren(loadingView());
@@ -612,7 +617,13 @@ export class FileViewer {
     };
   }
 
-  private reset(): void {
+  /**
+   * Tears down the active renderer: aborts its signal, rotates in a fresh controller
+   * for whatever comes next, runs its cleanups and revokes its object URLs. `payload`
+   * is deliberately left alone — the bytes survive a hand-off swap between renderers
+   * of the same object; `open()` is the one place that resets it, for a new object.
+   */
+  private releaseRenderer(): void {
     this.controller.abort();
     this.controller = new AbortController();
     for (const dispose of this.disposers.reverse()) {
@@ -625,6 +636,10 @@ export class FileViewer {
     this.disposers = [];
     for (const url of this.objectUrls) URL.revokeObjectURL(url);
     this.objectUrls = [];
+  }
+
+  private reset(): void {
+    this.releaseRenderer();
     this.payload = null;
     this.discardGuard = null;
     this.elements.content.querySelectorAll("audio, video").forEach((element) => (element as HTMLMediaElement).pause());
