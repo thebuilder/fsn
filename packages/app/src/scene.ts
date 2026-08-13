@@ -255,6 +255,13 @@ function seededHash(value: string): number {
   return Math.abs(hash >>> 0);
 }
 
+/** Spread-free max so a directory of any size cannot overflow the call stack. */
+function maxOf<T>(items: readonly T[], value: (item: T) => number, floor: number): number {
+  let max = floor;
+  for (const item of items) max = Math.max(max, value(item));
+  return max;
+}
+
 type Footprint = { width: number; depth: number };
 type Marker = { category: FileCategory; x: number; z: number };
 type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
@@ -299,7 +306,7 @@ function shelfPack<T extends Footprint>(
 
   if (orderInRow) rows.forEach((row) => row.items.sort(orderInRow));
 
-  const width = Math.max(...rows.map((row) => row.width), 0);
+  const width = maxOf(rows, (row) => row.width, 0);
   const depth = rows.reduce((total, row) => total + row.depth, 0) + gap * Math.max(rows.length - 1, 0);
   const placed: Placed<T>[] = [];
   let z = -depth / 2;
@@ -317,7 +324,7 @@ function shelfPack<T extends Footprint>(
 /** A row width that lands the pack near `aspect`:1 rather than one long corridor. */
 function packWidth(items: Footprint[], gap: number, aspect: number): number {
   const area = items.reduce((total, item) => total + (item.width + gap) * (item.depth + gap), 0);
-  return Math.max(Math.max(...items.map((item) => item.width), 1), Math.sqrt(area * aspect));
+  return Math.max(maxOf(items, (item) => item.width, 1), Math.sqrt(area * aspect));
 }
 
 /** A file is a tower: footprint roughly constant, height from its size on disk. */
@@ -416,7 +423,7 @@ function buildLayout(nodes: FsNode[]): AreaLayout {
       width: packed.width,
       depth: packed.depth,
       categoryRank,
-      peak: Math.max(...boxes.map((box) => box.height)),
+      peak: maxOf(boxes, (box) => box.height, -Infinity),
     }];
   });
 
@@ -431,7 +438,7 @@ function buildLayout(nodes: FsNode[]): AreaLayout {
 
   // Ripple the reveal outwards from the centre, capped so a huge directory
   // takes no longer to land than a small one.
-  const furthest = Math.max(...placements.map((p) => Math.hypot(p.position.x, p.position.z)), 1);
+  const furthest = maxOf(placements, (p) => Math.hypot(p.position.x, p.position.z), 1);
   placements.forEach((placement) => {
     placement.introDelay = (Math.hypot(placement.position.x, placement.position.z) / furthest) * INTRO_STAGGER;
   });
@@ -448,7 +455,7 @@ function buildLayout(nodes: FsNode[]): AreaLayout {
     radius: Math.hypot(groundWidth, groundDepth) / 2 + 6,
     groundWidth,
     groundDepth,
-    peakHeight: Math.max(...placements.map((p) => p.labelY), 0),
+    peakHeight: maxOf(placements, (p) => p.labelY, 0),
   };
 }
 
@@ -741,7 +748,9 @@ export class WorldScene {
     const grouped = new Map<FileCategory, Placement[]>();
     placements.forEach((placement) => {
       const category = categoryOf(placement.node);
-      grouped.set(category, [...(grouped.get(category) ?? []), placement]);
+      const bucket = grouped.get(category);
+      if (bucket) bucket.push(placement);
+      else grouped.set(category, [placement]);
     });
 
     const pickMeshes = new Map<THREE.InstancedMesh, Placement[]>();
