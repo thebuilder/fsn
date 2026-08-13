@@ -23,6 +23,8 @@ type Placement = {
   outlineScale: THREE.Vector3;
   /** Height at which a label clears this object and whatever stands on it. */
   labelY: number;
+  /** How much of `labelY` is the row's lane stagger, so growth can stretch it. */
+  labelLift: number;
   /** Milliseconds into the reveal before this object starts to rise. */
   introDelay: number;
   /** Set once the instanced mesh exists, so hover can address this one instance. */
@@ -145,14 +147,20 @@ const PLOT_GAP = 1.7;
 const BLOCK_AISLE = 3.8;
 
 /**
- * Each row further from the camera carries its label a lane higher, so a label is never
- * hidden behind the row in front of it. Side-by-side neighbours need no stagger, because
- * `TOWER_GAP` already spaces them further apart than a label is wide.
+ * Every step through a block — back a row or along one — carries a label a lane higher,
+ * so neither the neighbour behind nor the one beside prints at the same height. Stepping
+ * back is what stops a label hiding behind the row in front. Stepping along used to be
+ * unnecessary, because `TOWER_GAP` spaces towers further apart than a label is wide, but
+ * only just: a label that grows to stay readable at distance eats that margin
+ * immediately, and without a lane of its own each name in a row would take the space of
+ * the one beside it.
  *
- * The lane cycles rather than climbing. Only adjacent rows can overlap on screen — rows
- * further apart are already separated by perspective — so a few distinct heights is all
- * it takes. Left to accumulate, a directory deep enough to need ten rows would leave its
- * back labels floating ten units over their towers, attached to nothing.
+ * The lane cycles rather than climbing. Only immediate neighbours can overlap on screen
+ * — anything further is already separated by perspective — so a few distinct heights is
+ * all it takes. Left to accumulate, a directory deep enough to need ten rows would leave
+ * its back labels floating ten units over their towers, attached to nothing. Three lanes
+ * cannot also separate both diagonals; those are the widest-spaced neighbours of the
+ * eight, and the picker turns down whichever pair still meets on screen.
  */
 const LABEL_LANE = 1;
 const LABEL_LANE_CYCLE = 3;
@@ -180,6 +188,25 @@ const CATEGORY_ORDER: FileCategory[] = [
  */
 const LABEL_VISIBLE = 34;
 const LABEL_MAX_DISTANCE = 150;
+/** World size of a name plate at reading distance. Directories are the road signs. */
+const LABEL_SIZE = {
+  directory: { width: 5.2, height: 0.97 },
+  file: { width: 3.1, height: 0.58 },
+};
+/**
+ * A plate is sized for the distance it is read from. Held at a fixed world size it is
+ * comfortable in the front rows and a smear of grey pixels at the back of a district,
+ * so past `LABEL_READING_DISTANCE` it grows.
+ *
+ * The square root is the whole of the idea. Growing in exact proportion to distance
+ * would hold a name at a constant size on screen, which reads as a HUD pinned over the
+ * city rather than as something standing in it — and, worse, sorts the skyline by
+ * nothing: every name equally loud, no clue which one is near enough to fly to. Half
+ * the exponent gives back most of the lost pixels and still lets far read as far. The
+ * cap lands where growth would otherwise start to outpace the gaps the layout leaves.
+ */
+const LABEL_READING_DISTANCE = 26;
+const LABEL_MAX_SCALE = 2.4;
 /** Directories are how you travel, so they outrank a file at the same distance. */
 const LABEL_DIRECTORY_BONUS = 22;
 const LABEL_SELECT_INTERVAL = 120;
@@ -258,7 +285,7 @@ function seededHash(value: string): number {
 type Footprint = { width: number; depth: number };
 type Marker = { category: FileCategory; x: number; z: number };
 type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
-/** `lane` counts rows back from the front of the pack, for label stacking. */
+/** `lane` counts steps back and along from the front left of the pack, for label stacking. */
 type Placed<T> = { item: T; x: number; z: number; lane: number };
 
 /** Comparator that restores the order items arrived in, captured before any sorting. */
@@ -305,8 +332,10 @@ function shelfPack<T extends Footprint>(
   let z = -depth / 2;
   rows.forEach((row, index) => {
     let x = -row.width / 2;
-    row.items.forEach((item) => {
-      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane: rows.length - 1 - index });
+    row.items.forEach((item, column) => {
+      // Along the row as well as back through them: see `LABEL_LANE`.
+      const lane = rows.length - 1 - index + column;
+      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane });
       x += item.width + gap;
     });
     z += row.depth + gap;
@@ -377,6 +406,7 @@ function toPlacement(box: Box, x: number, z: number, labelLift: number): Placeme
     outlinePosition: new THREE.Vector3(x, GROUND_TOP + outlineHeight / 2, z),
     outlineScale: new THREE.Vector3(box.width, outlineHeight, box.depth),
     labelY: labelLift + (box.markers.length ? PLOT_TOP + MARKER_HEIGHT + 0.95 : GROUND_TOP + box.height + 0.82),
+    labelLift,
     introDelay: 0,
     decor,
   };
@@ -471,9 +501,54 @@ function makeLabel(text: string, color: string): THREE.Sprite {
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
-  sprite.scale.set(5.8, 1.08, 1);
-  return sprite;
+  // Sizing belongs to `placeLabel`, which owns it for the life of the sprite.
+  return new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+}
+
+/** A label's footprint on screen, in normalised device coordinates. */
+type LabelRect = { x: number; y: number; halfWidth: number; halfHeight: number };
+
+/**
+ * Plates are drawn with a transparent margin around the plate itself, so they may be
+ * allowed to pass a little closer than their quads suggest before they read as touching.
+ */
+const LABEL_RECT_SLACK = 0.86;
+
+function rectsOverlap(a: LabelRect, b: LabelRect): boolean {
+  return Math.abs(a.x - b.x) < (a.halfWidth + b.halfWidth) * LABEL_RECT_SLACK
+    && Math.abs(a.y - b.y) < (a.halfHeight + b.halfHeight) * LABEL_RECT_SLACK;
+}
+
+function labelSize(placement: Placement): { width: number; height: number } {
+  return placement.node.kind === "directory" ? LABEL_SIZE.directory : LABEL_SIZE.file;
+}
+
+/** How much larger than its reading size a plate at `distance` is drawn. */
+export function labelScaleFor(distance: number): number {
+  return THREE.MathUtils.clamp(Math.sqrt(distance / LABEL_READING_DISTANCE), 1, LABEL_MAX_SCALE);
+}
+
+/**
+ * Where a plate's middle sits once it has grown. Two things move with the scale, and
+ * both are about staying attached to the right object:
+ *
+ * The plate keeps its foot at the height a plate has always sat at, so it grows upwards
+ * into open sky. Grown about its middle it would creep down over the roof it names, and
+ * the constant gap between a name and its roof is the thing that reads as ownership.
+ *
+ * The lane stagger stretches with it. That stagger is what keeps the rows of a block from
+ * printing over each other, and a fixed one unit stops being enough the moment the plates
+ * it separates are twice their drawn size.
+ */
+function labelCenterY(placement: Placement, height: number, scale: number): number {
+  return placement.labelY + placement.labelLift * (scale - 1) + (height * (scale - 1)) / 2;
+}
+
+function placeLabel(sprite: THREE.Sprite, scale: number): void {
+  const placement = sprite.userData.placement as Placement;
+  const { width, height } = labelSize(placement);
+  sprite.scale.set(width * scale, height * scale, 1);
+  sprite.position.set(placement.position.x, labelCenterY(placement, height, scale), placement.position.z);
 }
 
 function createGlowTexture(): THREE.CanvasTexture {
@@ -591,7 +666,10 @@ export class WorldScene {
   /** Given a little volume so labels fade in before their anchor crosses the screen edge. */
   private readonly labelSphere = new THREE.Sphere(new THREE.Vector3(), 2.5);
   private readonly labelPoint = new THREE.Vector3();
-  private labelCandidates: { placement: Placement; area: DirectoryArea; score: number }[] = [];
+  private readonly labelForward = new THREE.Vector3();
+  private labelCandidates: { placement: Placement; area: DirectoryArea; score: number; distance: number }[] = [];
+  /** Screen boxes already claimed by this pick, in NDC. Rebuilt every pick. */
+  private readonly labelRects: LabelRect[] = [];
   private lastLabelSelect = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly callbacks: SceneCallbacks) {
@@ -910,14 +988,32 @@ export class WorldScene {
         const data = sprite.material.userData;
         data.proximityFade += (data.proximityTarget - data.proximityFade) * step;
         writeLabelOpacity(sprite, area.activation);
+        // Every frame, not every pick: the size follows the camera continuously, and a
+        // plate that resized in 120ms steps would visibly tick as you fly at it.
+        if (sprite.visible) this.sizeLabel(sprite);
       });
     });
   }
 
-  /** Chooses the nearest labels that are actually on screen, nearest first. */
+  /** Draws a plate at the size its current distance from the camera asks for. */
+  private sizeLabel(sprite: THREE.Sprite): void {
+    const placement = sprite.userData.placement as Placement;
+    this.labelPoint.set(placement.position.x, placement.labelY, placement.position.z);
+    placeLabel(sprite, labelScaleFor(this.camera.position.distanceTo(this.labelPoint)));
+  }
+
+  /**
+   * Chooses the nearest labels that are actually on screen, nearest first, and gives each
+   * winner the screen space it occupies. Nearest-first is what makes the claim fair: the
+   * name you are closest to is the one you are most likely reading, and it takes the spot
+   * from anything behind it rather than sharing it. Without this the growth would buy
+   * legibility in one row and spend it printing the next row through it — a plate is
+   * already about as wide as the gap between two towers, so there is no slack to grow into.
+   */
   private selectLabels(now: number): void {
     this.labelViewProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
     this.labelFrustum.setFromProjectionMatrix(this.labelViewProjection);
+    this.camera.getWorldDirection(this.labelForward);
 
     const candidates = this.labelCandidates;
     candidates.length = 0;
@@ -930,15 +1026,23 @@ export class WorldScene {
         this.labelSphere.center.copy(this.labelPoint);
         if (!this.labelFrustum.intersectsSphere(this.labelSphere)) continue;
         const bonus = placement.node.kind === "directory" ? LABEL_DIRECTORY_BONUS : 0;
-        candidates.push({ placement, area, score: distance - bonus });
+        candidates.push({ placement, area, score: distance - bonus, distance });
       }
     });
     candidates.sort((a, b) => a.score - b.score);
 
+    const claimed = this.labelRects;
+    claimed.length = 0;
     const shown = new Set<Placement>();
     let built = 0;
     for (const candidate of candidates) {
       if (shown.size >= LABEL_VISIBLE) break;
+      const rect = this.labelRect(candidate.placement, candidate.distance);
+      if (!rect || claimed.some((other) => rectsOverlap(rect, other))) continue;
+      // Claimed before the build budget is checked, so a name that has won its space keeps
+      // it while its canvas waits for a later frame. Handing the spot to whatever is behind
+      // it in the meantime would show that one for a tick and then take it away again.
+      claimed.push(rect);
       let sprite = candidate.placement.label;
       if (!sprite) {
         // Out of build budget: leave it for the next pick rather than stalling the frame.
@@ -958,13 +1062,34 @@ export class WorldScene {
     this.trimLabelCache();
   }
 
+  /**
+   * The box a plate would cover on screen, in normalised device coordinates. Measured
+   * rather than rasterised: the size is a pure function of distance, so a candidate can
+   * be laid out and turned down before its canvas is ever drawn.
+   */
+  private labelRect(placement: Placement, distance: number): LabelRect | null {
+    const scale = labelScaleFor(distance);
+    const { width, height } = labelSize(placement);
+    this.labelPoint.set(placement.position.x, labelCenterY(placement, height, scale), placement.position.z);
+    // Depth along the view axis, not distance from the eye: that is what perspective
+    // divides by, and at the edges of a 52° view the two are far enough apart to matter.
+    const depth = this.scratchVector.subVectors(this.labelPoint, this.camera.position).dot(this.labelForward);
+    if (depth <= this.camera.near) return null;
+    const halfFrustum = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * depth;
+    const ndc = this.labelPoint.project(this.camera);
+    return {
+      x: ndc.x,
+      y: ndc.y,
+      halfWidth: (width * scale) / (2 * halfFrustum * this.camera.aspect),
+      halfHeight: (height * scale) / (2 * halfFrustum),
+    };
+  }
+
   private buildLabel(placement: Placement, area: DirectoryArea): THREE.Sprite {
-    const isDirectory = placement.node.kind === "directory";
     const color = palette[categoryOf(placement.node)];
     const sprite = makeLabel(placement.node.name, `#${color.toString(16).padStart(6, "0")}`);
-    sprite.position.set(placement.position.x, placement.labelY, placement.position.z);
-    sprite.scale.set(isDirectory ? 5.2 : 3.1, isDirectory ? 0.97 : 0.58, 1);
     sprite.userData.placement = placement;
+    this.sizeLabel(sprite);
     sprite.userData.introDelay = placement.introDelay;
     sprite.material.userData.proximityFade = 0;
     sprite.material.userData.proximityTarget = 1;
