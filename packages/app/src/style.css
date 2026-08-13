@@ -787,20 +787,25 @@
      dismissed by selecting nothing, so it gives way rather than the only control a
      finger has — which sits under it in the stacking order and would lose the tap. */
   .details-panel { left: 0.6rem; bottom: 3.6rem; width: calc(100vw - 1.2rem); }
+  /**
+   * Unless something is selected, in which case the strip is what gives way. The panel
+   * has grown by a button and a row of metadata and is holding the answer to the tap
+   * that opened it; the manual is not what was being asked for, and it comes back the
+   * moment the selection is put down. Which is also why the panel's own edge moves
+   * rather than its height: it takes the room the strip vacated instead of climbing.
+   */
+  :root[data-selection] .controls { display: none; }
+  :root[data-selection] .details-panel { bottom: 0.6rem; }
   .details-heading { grid-template-columns: 2.6rem 1fr; padding: 0.7rem; }
   .file-glyph { width: 2.2rem; height: 2.2rem; }
   .details-panel dl { padding-inline: .7rem; }
   .enter-button { width: calc(100% - 1.4rem); margin: 0.25rem 0.7rem 0.7rem; }
   .status, .reticle { display: none; }
-  /* A phone has no keys to press and no reticle to aim, so the written bindings go and
-     the button stays: it is the only route to the gestures, which are all a finger has. */
-  .controls p { display: none; }
+  /* Down to the one binding that has to be read to be known. Which cluster flies is
+     still worth a line at this width; that Alt trades them is what the manual is for. */
+  .controls p:nth-of-type(n+2) { display: none; }
   .help-dialog { margin-top: 4vh; }
-  /* Gestures first at the width where they are the only bindings that apply; they would
-     otherwise sit three sections down, behind a keyboard and a mouse nobody here has. */
-  .help-screen { max-height: 74vh; display: flex; flex-direction: column; }
-  .help-screen > .help-command:first-child { order: -2; }
-  .help-block:last-of-type { order: -1; }
+  .help-screen { max-height: 74vh; }
   /* Stacked: two columns inside a phone's width leave the descriptions a word wide. */
   .help-block dl > div { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; padding: 0.4rem 0; }
   .welcome-dialog[open] { display: block; }
@@ -816,6 +821,29 @@
   .viewer-toolbar > div { width: 100%; justify-content: space-between; }
   .access-denied { padding: 1.5rem; }
   .access-denied h3 { font-size: 2rem; }
+}
+
+/**
+ * Which bindings are shown is a question about the hardware, not about the window.
+ *
+ * Width was standing in for it and getting both ends wrong: a tablet held wide was told
+ * to hold Shift, and a desktop window dragged narrow lost the keys it still had. These
+ * ask instead. `any-` rather than the primary-input forms, so a laptop with a
+ * touchscreen is credited with both and shown both, which is the honest answer.
+ */
+@media (any-pointer: coarse) and (not (any-hover: hover)) {
+  /* Which leaves the manual button alone on the strip: the one thing there a finger
+     can use, and its only route to the gestures. */
+  [data-input="keys"], [data-input="mouse"] { display: none; }
+  /* Gestures lead, since they are now the only bindings left that apply; they would
+     otherwise sit below a section of history with nothing above it. */
+  .help-screen { display: flex; flex-direction: column; }
+  .help-screen > .help-command:first-child { order: -2; }
+  .help-block[data-input="touch"] { order: -1; }
+}
+
+@media not all and (any-pointer: coarse) {
+  [data-input="touch"] { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -62,11 +62,12 @@
   <!-- Only the bindings nobody would guess: how to move, and that Alt trades the two
        clusters. Aiming, opening and stepping back are conventions this world shares
        with every other window on the machine, so they live in the manual behind the
-       last control — which is also the one thing on this strip a finger can use. -->
+       last control — which is also the one thing on this strip a finger can use.
+       The written keys are marked as keys, so a device with none never shows them. -->
   <section class="controls" id="controls" aria-label="3D navigation controls" tabindex="-1">
-    <p><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
-    <p><kbd>↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
-    <p><kbd>Shift</kbd> Boost</p>
+    <p data-input="keys"><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
+    <p data-input="keys"><kbd>↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
+    <p data-input="keys"><kbd>Shift</kbd> Boost</p>
     <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd aria-hidden="true">?</kbd> All controls</button>
   </section>
 
@@ -99,6 +100,10 @@
   The manual, printed by the machine it documents. Every binding lives here, mouse,
   keyboard and touch alike, so the strip on screen can stay down to the handful that
   are not guessable and this can hold the rest without competing for the view.
+
+  Every binding, but not to everyone: each block says which hardware it is addressed
+  to, and the stylesheet asks the device which of those it has. A phone is not told
+  to press Shift, and a desktop is not told to pinch.
 -->
 <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
   <form method="dialog">
@@ -110,18 +115,18 @@
     <div class="help-screen" tabindex="0">
       <p class="help-command"><span aria-hidden="true">fsn:/ $</span> man controls</p>
 
-      <section class="help-block">
+      <section class="help-block" data-input="mouse">
         <h3>Mouse</h3>
         <dl>
           <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
           <div><dt><kbd>Right-drag</kbd></dt><dd>Pan the view</dd></div>
           <div><dt><kbd>Scroll</kbd></dt><dd>Dolly in and out</dd></div>
-          <div><dt><kbd>Click</kbd></dt><dd>Select an object</dd></div>
+          <div><dt><kbd>Click</kbd></dt><dd>Select an object, or clear the selection by clicking bare ground</dd></div>
           <div><dt><kbd>Double click</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
         </dl>
       </section>
 
-      <section class="help-block">
+      <section class="help-block" data-input="keys">
         <h3>Flight</h3>
         <dl>
           <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Fly forward, left, back, right</dd></div>
@@ -135,20 +140,22 @@
 
       <section class="help-block">
         <h3>Objects</h3>
+        <!-- Marked a row at a time: the browser's own Back and Forward are worked by a
+             gesture as readily as by a key, so that one is addressed to everybody. -->
         <dl>
-          <div><dt><kbd>E</kbd></dt><dd>Target whatever the centre reticle is on</dd></div>
-          <div><dt><kbd>Enter</kbd></dt><dd>Open the target — enter a directory, or read a file</dd></div>
-          <div><dt><kbd>Esc</kbd><kbd>Backspace</kbd></dt><dd>Go back to the parent directory</dd></div>
+          <div data-input="keys"><dt><kbd>E</kbd></dt><dd>Target whatever the centre reticle is on</dd></div>
+          <div data-input="keys"><dt><kbd>Enter</kbd></dt><dd>Open the target — enter a directory, or read a file</dd></div>
+          <div data-input="keys"><dt><kbd>Esc</kbd><kbd>Backspace</kbd></dt><dd>Go back to the parent directory</dd></div>
           <div id="help-history"><dt><kbd>Back</kbd><kbd>Forward</kbd></dt><dd>Retrace the directories you have walked through. The address names the one you are in, so a reload comes back to it</dd></div>
-          <div><dt><kbd>⌘K</kbd><kbd>Ctrl K</kbd><kbd>/</kbd></dt><dd>Search the filesystem</dd></div>
-          <div><dt><kbd>?</kbd></dt><dd>Show this page</dd></div>
+          <div data-input="keys"><dt><kbd>⌘K</kbd><kbd>Ctrl K</kbd><kbd>/</kbd></dt><dd>Search the filesystem</dd></div>
+          <div data-input="keys"><dt><kbd>?</kbd></dt><dd>Show this page</dd></div>
         </dl>
       </section>
 
-      <section class="help-block">
+      <section class="help-block" data-input="touch">
         <h3>Touch</h3>
         <dl>
-          <div><dt><kbd>Tap</kbd></dt><dd>Select an object</dd></div>
+          <div><dt><kbd>Tap</kbd></dt><dd>Select an object, or clear the selection by tapping bare ground</dd></div>
           <div><dt><kbd>Double tap</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
           <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
           <div><dt><kbd>Pinch</kbd></dt><dd>Zoom; two fingers dragged together pan</dd></div>

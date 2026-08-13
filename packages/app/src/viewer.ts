@@ -1,4 +1,5 @@
 import { formatBytes, type FsNode } from "@fsn/core";
+import { dismissOnOutsidePress } from "./light-dismiss";
 import { el, noticePanel } from "./viewers/dom";
 import { rendererById, rendererFor } from "./viewers/registry";
 import type {
@@ -96,6 +97,14 @@ export class FileViewer {
     elements.dialog.addEventListener("cancel", (event) => {
       if (!this.canDiscard()) event.preventDefault();
     }, listener);
+    // Clicking away from the window puts it away, on the same terms as the close light:
+    // an editor with unsaved work still gets to object first.
+    dismissOnOutsidePress(elements.dialog, {
+      signal: this.lifecycle.signal,
+      onDismiss: () => {
+        if (this.canDiscard()) elements.dialog.close();
+      },
+    });
     // `close` is delivered asynchronously, so a dialog that has already been reopened
     // for the next object would otherwise be torn down by the previous one's event.
     elements.dialog.addEventListener("close", () => {

@@ -17,6 +17,8 @@ export type Placement = {
   outlineScale: THREE.Vector3;
   /** Height at which a label clears this object and whatever stands on it. */
   labelY: number;
+  /** How much of `labelY` is the row's lane stagger, so growth can stretch it. */
+  labelLift: number;
   /** Milliseconds into the reveal before this object starts to rise. */
   introDelay: number;
   /** Set once the instanced mesh exists, so hover can address this one instance. */
@@ -65,14 +67,20 @@ const PLOT_GAP = 1.7;
 const BLOCK_AISLE = 3.8;
 
 /**
- * Each row further from the camera carries its label a lane higher, so a label is never
- * hidden behind the row in front of it. Side-by-side neighbours need no stagger, because
- * `TOWER_GAP` already spaces them further apart than a label is wide.
+ * Every step through a block — back a row or along one — carries a label a lane higher,
+ * so neither the neighbour behind nor the one beside prints at the same height. Stepping
+ * back is what stops a label hiding behind the row in front. Stepping along used to be
+ * unnecessary, because `TOWER_GAP` spaces towers further apart than a label is wide, but
+ * only just: a label that grows to stay readable at distance eats that margin
+ * immediately, and without a lane of its own each name in a row would take the space of
+ * the one beside it.
  *
- * The lane cycles rather than climbing. Only adjacent rows can overlap on screen — rows
- * further apart are already separated by perspective — so a few distinct heights is all
- * it takes. Left to accumulate, a directory deep enough to need ten rows would leave its
- * back labels floating ten units over their towers, attached to nothing.
+ * The lane cycles rather than climbing. Only immediate neighbours can overlap on screen
+ * — anything further is already separated by perspective — so a few distinct heights is
+ * all it takes. Left to accumulate, a directory deep enough to need ten rows would leave
+ * its back labels floating ten units over their towers, attached to nothing. Three lanes
+ * cannot also separate both diagonals; those are the widest-spaced neighbours of the
+ * eight, and the picker turns down whichever pair still meets on screen.
  */
 const LABEL_LANE = 1;
 const LABEL_LANE_CYCLE = 3;
@@ -114,7 +122,7 @@ function maxOf<T>(items: readonly T[], value: (item: T) => number, floor: number
 type Footprint = { width: number; depth: number };
 type Marker = { category: FileCategory; x: number; z: number };
 type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
-/** `lane` counts rows back from the front of the pack, for label stacking. */
+/** `lane` counts steps back and along from the front left of the pack, for label stacking. */
 type Placed<T> = { item: T; x: number; z: number; lane: number };
 
 /** Comparator that restores the order items arrived in, captured before any sorting. */
@@ -161,8 +169,10 @@ export function shelfPack<T extends Footprint>(
   let z = -depth / 2;
   rows.forEach((row, index) => {
     let x = -row.width / 2;
-    row.items.forEach((item) => {
-      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane: rows.length - 1 - index });
+    row.items.forEach((item, column) => {
+      // Along the row as well as back through them: see `LABEL_LANE`.
+      const lane = rows.length - 1 - index + column;
+      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane });
       x += item.width + gap;
     });
     z += row.depth + gap;
@@ -233,6 +243,7 @@ function toPlacement(box: Box, x: number, z: number, labelLift: number): Placeme
     outlinePosition: new THREE.Vector3(x, GROUND_TOP + outlineHeight / 2, z),
     outlineScale: new THREE.Vector3(box.width, outlineHeight, box.depth),
     labelY: labelLift + (box.markers.length ? PLOT_TOP + MARKER_HEIGHT + 0.95 : GROUND_TOP + box.height + 0.82),
+    labelLift,
     introDelay: 0,
     decor,
   };

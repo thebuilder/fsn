@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { bandLevel, logBands } from "./bands";
 import type { CreateVisualizer, Signal, Visualizer } from "./types";
+import { createWaveField } from "./wavefield";
 
 /** Terrain resolution. Columns run across the road, rows run into the distance. */
 const COLS = 56;
@@ -19,12 +20,22 @@ const CEILING = 6;
 /** Highest bin the road reads, matching the bars so the two agree about the music. */
 const TOP_BIN = 220;
 
-/** Beat shockwave: crosses the whole road in well under half a second. */
-const PULSES = 3;
-const WAVE_SPEED = 430;
-const WAVE_WIDTH = 16;
-const WAVE_LIFE = DEPTH / WAVE_SPEED;
-const WAVE_HEIGHT = 3.6;
+/**
+ * The beat line: the row where an onset strikes the road, a short way ahead of the
+ * camera. Close enough that the hit lands in the viewer's lap, far enough that the
+ * wave rolling away toward the horizon can be watched going.
+ */
+const BEAT_ROW = Math.round(0.24 * (ROWS - 1));
+const BEAT_LINE_V = BEAT_ROW / (ROWS - 1);
+/** Wave field: fixed simulation step, squared Courant number, per-step retention. */
+const WAVE_STEP = 1 / 120;
+const WAVE_COURANT2 = 0.22;
+const WAVE_DAMP = 0.994;
+const WAVE_HEIGHT = 3.4;
+/** Bytes hold wave displacement as value * WAVE_PACK + 0.5, so troughs fit too. */
+const WAVE_PACK = 0.4;
+/** Terrain envelope: attack is instant, and each scrolled row keeps this much of a peak. */
+const ROW_DECAY = 0.84;
 
 const CYAN = new THREE.Color(0x4ff0ff);
 const MAGENTA = new THREE.Color(0xff4fd8);
@@ -42,11 +53,14 @@ const HORIZON = new THREE.Color(0xff5bb0);
  * ridge tears along a seam.
  *
  * Two things drive the height. The spectrum is written one row at a time at the
- * horizon and scrolls toward the camera, which is the slow landscape; and each onset
- * fires a shockwave that crosses the whole road in about four tenths of a second,
- * which is what actually reads as being on the beat. The scrolling terrain alone
- * cannot do that: at this length and speed a ridge needs some seven seconds to
- * arrive, so the ground under you would be answering a bar you have long forgotten.
+ * horizon and scrolls toward the camera — through a fast-attack, slow-release
+ * envelope per column, so a hit rises as a sharp ridge and falls away over the rows
+ * behind it instead of writing a plateau. And each onset strikes the beat line, a
+ * fixed row just ahead of the camera, driving a damped wave field simulated over the
+ * whole lattice: the hit ripples out toward the horizon and past the camera, which
+ * is what actually reads as being on the beat. The scrolling terrain alone cannot do
+ * that: at this length and speed a ridge needs some seven seconds to arrive, so the
+ * ground under you would be answering a bar you have long forgotten.
  */
 export const createGridVisualizer: CreateVisualizer = (stage, width, height): Visualizer => {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
@@ -65,13 +79,22 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
   historyTexture.magFilter = THREE.LinearFilter;
   historyTexture.needsUpdate = true;
 
+  // Wave displacement, encoded around a 128 centre so both crests and troughs fit
+  // in a byte — floats would need an extension for linear filtering.
+  const waveBytes = new Uint8Array(COLS * ROWS).fill(128);
+  const waveTexture = new THREE.DataTexture(waveBytes, COLS, ROWS, THREE.RedFormat, THREE.UnsignedByteType);
+  waveTexture.minFilter = THREE.LinearFilter;
+  waveTexture.magFilter = THREE.LinearFilter;
+  waveTexture.needsUpdate = true;
+
   const uniforms = {
     uHistory: { value: historyTexture },
+    uWave: { value: waveTexture },
     uAmplitude: { value: AMPLITUDE },
     uBeat: { value: 0 },
     uPump: { value: 0 },
     uEmerge: { value: 0 },
-    uPulseAge: { value: new Array<number>(PULSES).fill(-1) },
+    uScroll: { value: 0 },
     uCool: { value: CYAN },
     uHot: { value: MAGENTA },
   };
@@ -144,9 +167,14 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
   let speed = 0;
   let pump = 0;
   let emerge = 0;
-  const pulses: number[] = new Array(PULSES).fill(-1);
+  let simPending = 0;
+  let prevBeat = 0;
+  let prevBass = 0;
+  const waves = createWaveField(COLS, ROWS, WAVE_COURANT2, WAVE_DAMP);
+  const strikeWeights = new Float32Array(COLS);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const speedScale = reduced ? 0.35 : 1;
+  const strikeScale = reduced ? 0.45 : 1;
 
   /**
    * True until the buffer holds real audio. A freshly zeroed buffer would otherwise
@@ -165,6 +193,14 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
   const bands = logBands(Math.ceil(COLS / 2), TOP_BIN);
   /** Slow follower per band, so each column can be measured against its own normal. */
   const settled = new Float32Array(bands.length);
+  /** Fast-attack, slow-release envelope per band; what actually gets written to rows. */
+  const envelope = new Float32Array(bands.length);
+
+  /** Band index for a column: bass on the centre line, treble out at the shoulders. */
+  const columnBand = (column: number): number => {
+    const across = Math.abs((column / (COLS - 1)) * 2 - 1);
+    return Math.min(bands.length - 1, Math.round(across * (bands.length - 1)));
+  };
 
   /** Writes one analysis frame into the far row; everything else shifts one step nearer. */
   const pushRow = (signal: Signal): void => {
@@ -172,18 +208,26 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
     const base = (ROWS - 1) * COLS;
     for (let column = 0; column < COLS; column += 1) {
       const across = Math.abs((column / (COLS - 1)) * 2 - 1);
-      const index = Math.min(bands.length - 1, Math.round(across * (bands.length - 1)));
+      const index = columnBand(column);
       const level = bandLevel(signal.frequency, bands[index]);
-      if (column <= COLS / 2) settled[index] += (level - settled[index]) * 0.05;
+      if (column <= COLS / 2) {
+        settled[index] += (level - settled[index]) * 0.05;
 
-      // Two terms: the band's own level, expanded because a busy mix only ever uses
-      // the top of the range, plus how far it sits above its recent normal so an
-      // attack stands proud of the passage it lands in.
-      const transient = Math.max(0, level - settled[index]);
+        // Two terms: the band's own level, expanded because a busy mix only ever
+        // uses the top of the range, plus how far it sits above its recent normal so
+        // an attack stands proud of the passage it lands in. The result runs through
+        // an envelope — attack lands whole, release keeps only ROW_DECAY per row —
+        // so a hit writes a ridge with a sharp face and a falling tail, where the
+        // raw levels of a sustained passage wrote one long plateau.
+        const transient = Math.max(0, level - settled[index]);
+        const excitation = (level ** 2.2 * 0.4 + transient * 1.7) * (1 + signal.beat * 0.55);
+        envelope[index] = excitation > envelope[index] ? excitation : envelope[index] * ROW_DECAY;
+      }
+
       const shoulder = 1 - across * 0.3;
       // A drifting swell keeps the landscape alive before anything is playing.
       const idle = 0.05 + Math.sin(travel * 0.08 + column * 0.3) * 0.028 + Math.cos(travel * 0.05 - column * 0.13) * 0.02;
-      const raw = (level ** 2.2 * 0.55 + transient * 1.1) * shoulder + idle;
+      const raw = envelope[index] * shoulder + idle;
       // Soft knee, never a hard clamp. Clipping here is what flatlines the middle of
       // the road: the centre columns run hottest, so they are the first to hit the
       // ceiling and sit there, pinned flat and fully magenta, for the whole passage.
@@ -225,23 +269,47 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
     // which is what makes a finite strip of geometry read as an endless road.
     terrain.position.z = travel;
 
-    for (let index = 0; index < PULSES; index += 1) {
-      if (pulses[index] >= 0) pulses[index] += delta;
-      if (pulses[index] > WAVE_LIFE) pulses[index] = -1;
+    // An onset strikes the beat line, shaped by the spectrum so the hit is tallest
+    // where the music is loudest; between onsets a rising bass gives it a smaller
+    // nudge, so the surface keeps swelling with the groove even when the detector
+    // stays quiet. The field does the rest: ripples run off toward the horizon and
+    // past the camera, ring off the shoulders, and die away.
+    const bassRise = Math.max(0, signal.bass - prevBass);
+    const struck = signal.beat > prevBeat;
+    if (signal.playing && (struck || bassRise > 0.012)) {
+      for (let column = 0; column < COLS; column += 1) {
+        strikeWeights[column] = 0.45 + bandLevel(signal.frequency, bands[columnBand(column)]) * 0.9;
+      }
+      const strength = struck ? 0.55 + signal.level * 0.9 : Math.min(0.5, bassRise * 2.4);
+      waves.strike(BEAT_ROW, strikeWeights, strength * strikeScale);
     }
-    if (signal.beat > 0.85) {
-      const slot = pulses.indexOf(-1);
-      if (slot >= 0) pulses[slot] = 0;
+    prevBeat = signal.beat;
+    prevBass = signal.bass;
+
+    // Fixed-step so the wave speed does not depend on the frame rate; capped so a
+    // slow frame cannot queue a burst of catch-up steps.
+    simPending = Math.min(simPending + delta, WAVE_STEP * 5);
+    while (simPending >= WAVE_STEP) {
+      simPending -= WAVE_STEP;
+      waves.step();
     }
+    const field = waves.read();
+    for (let index = 0; index < field.length; index += 1) {
+      waveBytes[index] = Math.max(0, Math.min(255, Math.round((field[index] * WAVE_PACK + 0.5) * 255)));
+    }
+    waveTexture.needsUpdate = true;
+
     // The seed lands on every row at once, so without this the road would snap from
     // a bare plane to a fully formed landscape in a single frame. Rising out of the
     // plane instead reads as the world arriving with the music.
     emerge += ((refill ? 0 : 1) - emerge) * Math.min(1, delta * 1.6);
 
-    uniforms.uPulseAge.value = pulses;
     uniforms.uBeat.value = signal.beat;
     uniforms.uPump.value = pump;
     uniforms.uEmerge.value = emerge;
+    // The wave field lives in world space; the shader shifts its samples back by the
+    // lattice's slide so crests stand still while the road moves beneath them.
+    uniforms.uScroll.value = travel / DEPTH;
     uniforms.uAmplitude.value = AMPLITUDE * (reduced ? 0.55 : 1);
     sunUniforms.uBeat.value = signal.beat;
     sunUniforms.uTime.value = signal.elapsed;
@@ -261,7 +329,8 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
       // Not a zero fill: the next frame reseeds every row, so the road never shows
       // a step between the new position's audio and the old position's trail.
       refill = true;
-      pulses.fill(-1);
+      envelope.fill(0);
+      waves.clear();
     },
     resize: (nextWidth, nextHeight) => {
       renderer.setSize(nextWidth, nextHeight, false);
@@ -278,6 +347,7 @@ export const createGridVisualizer: CreateVisualizer = (stage, width, height): Vi
         }
       });
       historyTexture.dispose();
+      waveTexture.dispose();
       renderer.dispose();
       // The world behind the dialog holds a context too; hand this one back.
       renderer.forceContextLoss();
@@ -349,28 +419,23 @@ function createStars(): THREE.Points {
 
 const TERRAIN_VERTEX = /* glsl */ `
   uniform sampler2D uHistory;
+  uniform sampler2D uWave;
   uniform float uAmplitude;
   uniform float uPump;
   uniform float uEmerge;
-  uniform float uPulseAge[${PULSES}];
+  uniform float uScroll;
   varying float vHeight;
   varying float vFade;
+  varying float vRow;
 
   void main() {
     // uv.y == 1 is the horizon, and the newest row of the buffer.
     float terrain = texture2D(uHistory, uv).r;
 
-    // Distance back from the horizon, which is where a beat's shockwave starts.
-    float fromHorizon = (1.0 - uv.y) * ${DEPTH.toFixed(1)};
-    float wave = 0.0;
-    for (int index = 0; index < ${PULSES}; index += 1) {
-      float age = uPulseAge[index];
-      if (age >= 0.0) {
-        float offset = fromHorizon - age * ${WAVE_SPEED.toFixed(1)};
-        float falloff = max(0.0, 1.0 - age / ${WAVE_LIFE.toFixed(4)});
-        wave += exp(-offset * offset / ${(WAVE_WIDTH * WAVE_WIDTH).toFixed(1)}) * falloff;
-      }
-    }
+    // The wave field is fixed in world space: sampling at a scroll-corrected row
+    // keeps crests still while the lattice slides forward and wraps beneath them.
+    vRow = uv.y - uScroll;
+    float wave = (texture2D(uWave, vec2(uv.x, vRow)).r - 0.5) / ${WAVE_PACK.toFixed(2)};
 
     // Settle the far edge into the haze so the wrap seam never shows.
     float ends = smoothstep(1.0, 0.9, uv.y);
@@ -385,10 +450,16 @@ const TERRAIN_VERTEX = /* glsl */ `
     // The pump adds to full relief rather than scaling up from a flattened base, so a
     // quiet passage still has a landscape instead of a plain.
     float raised = vHeight * uAmplitude * (1.0 + uPump * near * 1.1) + wave * ${WAVE_HEIGHT.toFixed(2)} * ends * uEmerge;
-    // Soft ceiling well below the camera. A pump that doubles the height would
-    // otherwise put peaks straight through the lens on a loud passage, and a hard
-    // clamp would shear their tops off flat.
-    displaced.y += ${CEILING.toFixed(1)} * (1.0 - exp(-raised / ${CEILING.toFixed(1)}));
+    // Soft ceiling well below the camera, soft floor just above the ground plane.
+    // Peaks must not run through the lens on a loud passage, and a wave trough must
+    // not dip under the opaque floor, which would cut the grid into dark gaps —
+    // and a hard clamp at either end would shear the shape off flat.
+    displaced.y += raised > 0.0
+      ? ${CEILING.toFixed(1)} * (1.0 - exp(-raised / ${CEILING.toFixed(1)}))
+      : -0.55 * (1.0 - exp(raised / 0.55));
+
+    // Wave crests earn heat the way terrain peaks do; troughs stay cool.
+    vHeight += max(wave, 0.0) * 0.4;
 
     vFade = smoothstep(1.0, 0.35, uv.y);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
@@ -401,11 +472,16 @@ const TERRAIN_FRAGMENT = /* glsl */ `
   uniform float uBeat;
   varying float vHeight;
   varying float vFade;
+  varying float vRow;
 
   void main() {
     // Ordinary ground stays cyan; only genuine peaks earn the hot end of the ramp.
     vec3 color = mix(uCool, uHot, clamp(vHeight * vHeight * 2.2 + uBeat * 0.15, 0.0, 1.0));
-    float glow = vFade * (0.85 + uBeat * 0.45);
+    // The beat line: a faint standing marker where onsets strike, flaring with each
+    // hit so the eye learns where the beat lands before the wave sets out.
+    float line = exp(-pow((vRow - ${BEAT_LINE_V.toFixed(4)}) * 60.0, 2.0));
+    color += uHot * line * (0.12 + uBeat * 0.9);
+    float glow = vFade * (0.85 + uBeat * 0.45) + line * (0.05 + uBeat * 0.35);
     gl_FragColor = vec4(color * glow, glow);
   }
 `;
