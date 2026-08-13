@@ -85,7 +85,10 @@ export async function render(host: ViewerHost): Promise<void> {
         }
         result = await host.writeText!(serialized, { force: true });
       }
-      if (result.status !== "saved") return;
+      if (result.status !== "saved") {
+        host.setStatus("SAVE FAILED / THE FILE CHANGED AGAIN — REOPEN TO RETRY");
+        return;
+      }
       savedCanonicalValue = valueToSave;
       host.node.size = result.size;
       host.node.modified = result.modified;
