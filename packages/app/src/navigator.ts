@@ -574,7 +574,7 @@ function renderMatches(matches: SearchMatch[]): void {
       const elsewhere = trail[trail.length - 1].id !== currentDirectory().id;
       detail.textContent = elsewhere ? `${measure} · ${trail.map((part) => part.name).join("/")}` : measure;
     }
-    button.addEventListener("click", () => revealMatch(match), listener);
+    button.addEventListener("click", () => void revealMatch(match), listener);
     // Keep pointer and keyboard on the same row, so there is only ever one highlight.
     button.addEventListener("pointerenter", () => setActiveResult(index), listener);
     item.append(button);
@@ -621,17 +621,26 @@ function emptyResult(message: string): HTMLLIElement {
   return empty;
 }
 
-/** Travels to the directory holding the match before framing it, so results outside the view still work. */
-function revealMatch(match: SearchMatch): void {
+/**
+ * A result is a destination, not a highlight: picking one does what double-clicking the
+ * object in the world would do. The directory holding it is travelled to first, since a
+ * match from elsewhere in the tree has no district on screen to open anything in.
+ *
+ * That travel is awaited rather than fired off. Building a district takes the camera and
+ * clears the selection, so a match framed before it lands is a match it un-frames.
+ */
+async function revealMatch(match: SearchMatch): Promise<void> {
   searchDialog.close();
   const destination = match.trail[match.trail.length - 1];
   if (destination.id !== currentDirectory().id) {
     const direction: NavigationDirection = match.trail.length > ancestry.length ? "forward" : "backward";
     ancestry = [...match.trail];
-    void renderDirectory(true, direction);
+    await renderDirectory(true, direction);
   }
+  // Frame it, then open it. What opening means is `openNode`'s question to answer, and a
+  // directory answers it by flying into itself, which takes the camera off the approach.
   world.focusNode(match.node);
-  updateSelection(match.node);
+  await openNode(match.node);
 }
 
 function trimName(name: string, length: number): string {
