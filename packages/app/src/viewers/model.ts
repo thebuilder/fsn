@@ -53,10 +53,24 @@ async function parse(extension: string, buffer: ArrayBuffer): Promise<THREE.Obje
     return new OBJLoader().parse(new TextDecoder().decode(buffer));
   }
   const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-  // An empty resource path keeps the loader from chasing sibling .bin/.png files it
-  // cannot reach; self-contained .glb and data-URI .gltf still resolve.
-  const gltf = await new GLTFLoader().parseAsync(buffer, "");
+  // An empty resource path alone is not enough: three resolves absolute URIs unchanged
+  // regardless of it, so a crafted .gltf could still name an attacker's host for its
+  // buffers or images. The URL modifier neutralises every reference before it resolves;
+  // self-contained .glb and data-URI .gltf still work, everything else fails locally.
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(confineLoaderUrl);
+  const gltf = await new GLTFLoader(manager).parseAsync(buffer, "");
   return gltf.scene;
+}
+
+/**
+ * A model file names its own resources, and those names are untrusted input. Only
+ * self-contained references may resolve; anything that would leave the page —
+ * absolute, protocol-relative, or path-relative — collapses to an empty data URI,
+ * so the request never happens and the loader fails locally instead.
+ */
+export function confineLoaderUrl(url: string): string {
+  return url.startsWith("data:") || url.startsWith("blob:") ? url : "data:,";
 }
 
 function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerHost): void {
