@@ -134,7 +134,10 @@
   .brand > span:last-child { display: grid; gap: 0.15rem; }
   .brand strong { font: 800 1rem/1 var(--mono); letter-spacing: 0.16em; }
   .brand small { color: var(--muted); font: 500 0.55rem/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
-  .brand-mark { position: relative; width: 2.25rem; height: 2.25rem; transform: rotate(-8deg); }
+  /* The stack steps downwards, so what is painted hangs below the box it is centred in
+     and the mark reads as sagging off the row. Offset back up by half that step, which
+     scales with the mark and so holds at both sizes it is drawn at. */
+  .brand-mark { position: relative; top: -0.19rem; width: 2.25rem; height: 2.25rem; transform: rotate(-8deg); }
   .brand-mark i { position: absolute; inset: 0.1rem 0.55rem; border: 1px solid var(--phosphor); background: rgba(134, 250, 221, 0.04); transform: skewY(-27deg); box-shadow: 0 0 12px rgba(134, 250, 221, 0.15); }
   .brand-mark i:nth-child(2) { transform: translateX(0.32rem) translateY(0.24rem) skewY(-27deg); opacity: 0.65; }
   .brand-mark i:nth-child(3) { transform: translateX(0.64rem) translateY(0.48rem) skewY(-27deg); opacity: 0.32; }
@@ -466,6 +469,37 @@
   .search-results kbd { min-width: 1.9rem; align-items: center; padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; }
   .search-empty { padding: 3rem; color: var(--muted); font: 650 0.64rem var(--mono); text-align: center; }
 
+  /**
+   * The manual reads as terminal output because that is the only voice this interface
+   * has: a prompt, the command that was run, and the machine answering under it. The
+   * screen is a shade darker than the frame around it, the way a terminal window sits
+   * inside its own chrome.
+   */
+  .help-dialog { width: min(42rem, calc(100vw - 2rem)); margin-top: 8vh; padding: 0; border: 1px solid var(--line-strong); background: var(--panel-solid); box-shadow: 0 2rem 5rem rgba(0,0,0,.7), 0 0 50px rgba(134,250,221,.08); }
+  .help-dialog[open] { animation: viewer-in 180ms steps(4, end); }
+  .help-dialog form { margin: 0; }
+  .help-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem; border-bottom: 1px solid var(--line); }
+  .help-screen { max-height: min(32rem, 66vh); overflow: auto; padding: 1rem 1.1rem 1.2rem; background: #071110; }
+  .help-screen:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: -4px; }
+  .help-command { margin: 0; color: var(--phosphor-bright); font: 650 0.68rem var(--mono); }
+  .help-command span { margin-right: 0.5em; color: #4d8477; }
+  /* The caret parks on a bare prompt at the foot, the way a shell leaves a screen it
+     has finished printing. Its blink is stopped by the reduced-motion rule, which
+     leaves the block solid — still a prompt, just not a flashing one. */
+  .help-end { margin-top: 1.4rem; }
+  .help-end::after { display: inline-block; width: .55em; height: .95em; content: ""; background: var(--phosphor); vertical-align: -.14em; animation: caret-blink 1.1s steps(1) infinite; }
+  .help-block { margin-top: 1.35rem; }
+  .help-block h3 { margin: 0 0 0.55rem; color: var(--phosphor); font: 700 0.58rem var(--mono); letter-spacing: .18em; text-transform: uppercase; }
+  .help-block h3::before { color: #3f6f64; content: "── "; }
+  .help-block dl { margin: 0; }
+  .help-block dl > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.75rem; padding: 0.3rem 0; }
+  /* Keys wrap as a group rather than stretching the column: a binding spelled out of
+     four of them is still one term, and the description stays on its own axis. Aligned
+     to the start, or a key opposite a description long enough to wrap is stretched to
+     the height of both its lines and stops reading as a key. */
+  .help-block dt { display: flex; flex-wrap: wrap; align-items: start; gap: 0.25rem; }
+  .help-block dd { margin: 0; color: #b8ffe9; font: 500 0.66rem/1.5 var(--mono); }
+
   /* The browser's own dialog cap sits a little inside these, and would quietly shave a
      window that asks to be as tall as it is allowed; these mirror VIEWPORT_INSET in
      viewer.ts, which is what actually holds the window off the viewport edge. */
@@ -708,21 +742,59 @@
   .details-panel { top: auto; bottom: 4.1rem; }
   .legend { display: none; }
   .controls { left: auto; right: 1rem; transform: none; }
-  .controls p:nth-child(n+3) { display: none; }
+  /* Boost is the one of the three worth losing first: it modifies a binding still on
+     screen rather than naming one of its own. The manual button is never dropped. */
+  .controls p:nth-of-type(n+3) { display: none; }
 }
 
 @media (max-width: 600px) {
   .topbar { padding: 0.6rem; }
-  .brand small, .top-actions .icon-button { display: none; }
+  .brand small { display: none; }
+  /**
+   * The mark is the tallest thing in the bar and sets the row's height on its own, which
+   * on a phone reads as a logo the buttons are hanging off. `zoom` rather than a smaller
+   * width and height: the three shards are inset and offset in absolute rem, so resizing
+   * the box alone would thin them out and slide the stack off its corner. This scales the
+   * layout box and everything drawn in it by the same factor, so the mark keeps its shape
+   * and the bar's height comes down with it.
+   */
+  .brand-mark { zoom: 0.84; }
+  /**
+   * The shards are absolutely positioned, so they paint well outside the mark's own box:
+   * scaling the box alone left a silhouette half again as tall as it is wide, hanging
+   * below the buttons it was meant to line up with and nearly into the breadcrumbs. The
+   * skew and the stack offsets set the height it overshoots by, and neither can come down
+   * without changing the mark's character, so the parallelograms are shortened instead —
+   * the one dimension the glyph can give up and still read as plates seen side on.
+   */
+  .brand-mark i { inset: 0.4rem 0.55rem; }
+  /* Search earns its place back here: it is the quickest way through a deep tree, and it
+     is the one thing a small screen makes harder to do by flying. The demo button has
+     already gone by this width, so it costs the row nothing. */
+  .top-actions .icon-button { width: 2.1rem; min-height: 2.1rem; }
   .button { min-height: 2.1rem; padding: 0.45rem 0.6rem; font-size: 0.58rem; }
   .scene-title { top: 7.8rem; width: calc(100vw - 2rem); }
   .scene-title h1 { font-size: 1.45rem; }
-  .details-panel { left: 0.6rem; bottom: 2.8rem; width: calc(100vw - 1.2rem); }
+  /* Clears the strip below it. The panel is the taller box and the one that can be
+     dismissed by selecting nothing, so it gives way rather than the only control a
+     finger has — which sits under it in the stacking order and would lose the tap. */
+  .details-panel { left: 0.6rem; bottom: 3.6rem; width: calc(100vw - 1.2rem); }
   .details-heading { grid-template-columns: 2.6rem 1fr; padding: 0.7rem; }
   .file-glyph { width: 2.2rem; height: 2.2rem; }
   .details-panel dl { padding-inline: .7rem; }
   .enter-button { width: calc(100% - 1.4rem); margin: 0.25rem 0.7rem 0.7rem; }
-  .controls, .status, .reticle { display: none; }
+  .status, .reticle { display: none; }
+  /* A phone has no keys to press and no reticle to aim, so the written bindings go and
+     the button stays: it is the only route to the gestures, which are all a finger has. */
+  .controls p { display: none; }
+  .help-dialog { margin-top: 4vh; }
+  /* Gestures first at the width where they are the only bindings that apply; they would
+     otherwise sit three sections down, behind a keyboard and a mouse nobody here has. */
+  .help-screen { max-height: 74vh; display: flex; flex-direction: column; }
+  .help-screen > .help-command:first-child { order: -2; }
+  .help-block:last-of-type { order: -1; }
+  /* Stacked: two columns inside a phone's width leave the descriptions a word wide. */
+  .help-block dl > div { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; padding: 0.4rem 0; }
   .welcome-dialog[open] { display: block; }
   .welcome-visual { min-height: 11rem; border-right: 0; border-bottom: 1px solid var(--line); }
   .welcome-copy { padding: 1.5rem; }

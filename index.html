@@ -87,14 +87,15 @@
         </ul>
       </section>
 
+      <!-- Only the bindings nobody would guess: how to move, and that Alt trades the two
+           clusters. Aiming, opening and stepping back are conventions this world shares
+           with every other window on the machine, so they live in the manual behind the
+           last control — which is also the one thing on this strip a finger can use. -->
       <section class="controls" id="controls" aria-label="3D navigation controls" tabindex="-1">
         <p><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
         <p><kbd>↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
         <p><kbd>Shift</kbd> Boost</p>
-        <p><kbd>R</kbd> <kbd>F</kbd> Up / down</p>
-        <p><kbd>E</kbd> Target</p>
-        <p><kbd>Enter</kbd> Open</p>
-        <p><kbd>Home</kbd> Recentre</p>
+        <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd aria-hidden="true">?</kbd> All controls</button>
       </section>
 
       <div class="reticle" id="reticle" aria-hidden="true"><i></i><span>NO TARGET</span></div>
@@ -118,6 +119,70 @@
           <p class="search-count" id="search-count" aria-live="polite"></p>
         </div>
         <ul class="search-results" id="search-results" role="listbox" aria-label="Search results"></ul>
+      </form>
+    </dialog>
+
+    <!--
+      The manual, printed by the machine it documents. Every binding lives here, mouse,
+      keyboard and touch alike, so the strip on screen can stay down to the handful that
+      are not guessable and this can hold the rest without competing for the view.
+    -->
+    <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
+      <form method="dialog">
+        <header class="help-header">
+          <h2 class="eyebrow" id="help-title">FSN(1) · CONTROL REFERENCE</h2>
+          <button class="key-button" type="submit" aria-label="Close controls">ESC</button>
+        </header>
+        <!-- Focusable because it scrolls: a pane a mouse can reach a keyboard must too. -->
+        <div class="help-screen" tabindex="0">
+          <p class="help-command"><span aria-hidden="true">fsn:/ $</span> man controls</p>
+
+          <section class="help-block">
+            <h3>Mouse</h3>
+            <dl>
+              <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
+              <div><dt><kbd>Right-drag</kbd></dt><dd>Pan the view</dd></div>
+              <div><dt><kbd>Scroll</kbd></dt><dd>Dolly in and out</dd></div>
+              <div><dt><kbd>Click</kbd></dt><dd>Select an object</dd></div>
+              <div><dt><kbd>Double click</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
+            </dl>
+          </section>
+
+          <section class="help-block">
+            <h3>Flight</h3>
+            <dl>
+              <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Fly forward, left, back, right</dd></div>
+              <div><dt><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd>Turn — swing the view up, left, down, right</dd></div>
+              <div><dt><kbd>Alt</kbd></dt><dd>Hold to trade the two clusters: W A S D turns and the arrows fly. The strip at the foot of the screen says which is which</dd></div>
+              <div><dt><kbd>R</kbd><kbd>F</kbd></dt><dd>Rise and descend</dd></div>
+              <div><dt><kbd>Shift</kbd></dt><dd>Hold alongside any of these to fly and turn faster</dd></div>
+              <div><dt><kbd>Home</kbd></dt><dd>Recentre on the directory you are in</dd></div>
+            </dl>
+          </section>
+
+          <section class="help-block">
+            <h3>Objects</h3>
+            <dl>
+              <div><dt><kbd>E</kbd></dt><dd>Target whatever the centre reticle is on</dd></div>
+              <div><dt><kbd>Enter</kbd></dt><dd>Open the target — enter a directory, or read a file</dd></div>
+              <div><dt><kbd>Esc</kbd><kbd>Backspace</kbd></dt><dd>Go back to the parent directory</dd></div>
+              <div><dt><kbd>⌘K</kbd><kbd>Ctrl K</kbd><kbd>/</kbd></dt><dd>Search the file system</dd></div>
+              <div><dt><kbd>?</kbd></dt><dd>Show this page</dd></div>
+            </dl>
+          </section>
+
+          <section class="help-block">
+            <h3>Touch</h3>
+            <dl>
+              <div><dt><kbd>Tap</kbd></dt><dd>Select an object</dd></div>
+              <div><dt><kbd>Double tap</kbd></dt><dd>Enter a directory, open a file, or travel to bare ground</dd></div>
+              <div><dt><kbd>Drag</kbd></dt><dd>Orbit around the centre of the view</dd></div>
+              <div><dt><kbd>Pinch</kbd></dt><dd>Zoom; two fingers dragged together pan</dd></div>
+            </dl>
+          </section>
+
+          <p class="help-command help-end"><span aria-hidden="true">fsn:/ $</span></p>
+        </div>
       </form>
     </dialog>
 
