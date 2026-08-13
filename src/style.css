@@ -165,6 +165,12 @@
    * bar that guesses at a fraction is a worse answer than one that only says "still
    * reading". It fades rather than cuts, because it arrives 300ms into a wait that may
    * end on the next tick, and a hard flash there reads as an error.
+   *
+   * Idle it is `visibility: hidden`, not merely transparent, which is what takes it out
+   * of the accessibility tree: it reports itself as a progress bar, and one of those
+   * sitting in the tree at all hours, progressing at nothing, is worse than none. The
+   * visibility switch waits out the fade on the way down and leads it on the way up, so
+   * the bar is only ever in the tree while it is on screen.
    */
   .loading-bar {
     position: absolute;
@@ -172,12 +178,13 @@
     inset: auto 0 -1px;
     height: 3px;
     overflow: hidden;
+    visibility: hidden;
     opacity: 0;
     background: rgba(134, 250, 221, 0.1);
-    transition: opacity 200ms var(--ease-out);
+    transition: opacity 200ms var(--ease-out), visibility 0s linear 200ms;
     pointer-events: none;
   }
-  :root[data-busy] .loading-bar { opacity: 1; }
+  :root[data-busy] .loading-bar { visibility: visible; opacity: 1; transition: opacity 200ms var(--ease-out), visibility 0s; }
   .loading-bar i {
     position: absolute;
     inset: 0 auto 0 0;
@@ -186,8 +193,11 @@
        this thin at full strength that the sweep reads as a smudge rather than a light. */
     background: linear-gradient(90deg, transparent, var(--phosphor) 35% 65%, transparent);
     box-shadow: 0 0 12px rgba(134, 250, 221, 0.5);
-    animation: load-sweep 1.15s ease-in-out infinite;
   }
+  /* Declared on the busy state rather than paused out of it, so each wait starts its
+     sweep from the left edge instead of resuming wherever the last one was stopped —
+     and nothing is animating on a page whose every frame belongs to the scene. */
+  :root[data-busy] .loading-bar i { animation: load-sweep 1.15s ease-in-out infinite; }
 
   .top-actions, .welcome-actions { display: flex; align-items: center; gap: 0.5rem; }
   .button, .icon-button, .tool-toggle, .key-button {
