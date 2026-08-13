@@ -63,6 +63,8 @@ const searchCount = getElement<HTMLElement>("search-count");
 const scopeSwitch = getElement<HTMLElement>("scope-switch");
 const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
 const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
+const helpDialog = getElement<HTMLDialogElement>("help-dialog");
+const helpButton = getElement<HTMLButtonElement>("help-button");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
 const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
@@ -640,6 +642,7 @@ demoButton.addEventListener("click", () => {
 });
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode));
 searchButton.addEventListener("click", openSearch);
+helpButton.addEventListener("click", () => helpDialog.showModal());
 searchInput.addEventListener("input", () => renderSearchResults(searchInput.value));
 searchDialog.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -717,6 +720,14 @@ window.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     if (!searchDialog.open) openSearch();
+    return;
+  }
+  // On most layouts "?" is Shift+/, so it arrives as its own key and never reaches the
+  // search branch below. Nothing opens over an open dialog — including the search box,
+  // which is where the only text field on the page lives.
+  if (event.key === "?" && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    helpDialog.showModal();
     return;
   }
   if (event.key === "/" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
