@@ -95,6 +95,15 @@ impl ActiveRoot {
             .as_ref()
             .ok_or_else(|| "No desktop folder is authorized".to_string())?;
         let relative = relative_path(&grant.display_path, path)?.to_path_buf();
+        // A missing target passes through here: the write path produces its own error for a
+        // nonexistent file, matching current behavior. Only an existing non-regular-file entry
+        // (symlink, directory, etc.) is refused, so a save can't be redirected through a
+        // symlinked name into replacing the link's target — or the link itself — elsewhere.
+        if let Ok(metadata) = grant.dir.symlink_metadata(&relative) {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("Only regular files can be written".into());
+            }
+        }
         let dir = grant
             .dir
             .try_clone()
@@ -153,6 +162,45 @@ mod tests {
                 .map_err(|error| error.to_string())
         });
         assert!(result.is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn scoped_allows_a_regular_file() {
+        let base = std::env::temp_dir().join(format!(
+            "fsn-grant-scoped-regular-{}-{}",
+            std::process::id(),
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("notes.txt"), b"hello").unwrap();
+        // Canonicalize before use: on macOS `std::env::temp_dir()` traverses a symlink
+        // (`/var` -> `/private/var`), and `replace` canonicalizes internally, so the display
+        // path used to look up entries must match that canonical form.
+        let base = base.canonicalize().unwrap();
+        let grant = ActiveRoot::default();
+        grant.replace(&base).unwrap();
+        let result = grant.scoped(&base.join("notes.txt"));
+        assert!(result.is_ok(), "error: {:?}", result.err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_refuses_a_symlinked_entry() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!(
+            "fsn-grant-scoped-symlink-{}-{}",
+            std::process::id(),
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("target.txt"), b"hello").unwrap();
+        symlink(base.join("target.txt"), base.join("link.txt")).unwrap();
+        let base = base.canonicalize().unwrap();
+        let grant = ActiveRoot::default();
+        grant.replace(&base).unwrap();
+        assert!(grant.scoped(&base.join("link.txt")).is_err());
         std::fs::remove_dir_all(base).unwrap();
     }
 }
