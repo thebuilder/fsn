@@ -156,6 +156,38 @@ function restartTitleTransition(): void {
   sceneTitle.classList.add("is-entering");
 }
 
+/**
+ * How long a read may take before it is worth reporting. Anything quicker is over
+ * before a bar has finished fading in, so announcing it only flickers; past it the
+ * wait starts reading as a click that did not land, which is the thing to answer.
+ */
+const PENDING_DELAY = 300;
+let pendingReads = 0;
+let pendingTimer = 0;
+
+/**
+ * Marks a read as in flight and hands back the one call that ends it, however it ends.
+ * Counted rather than boolean: a directory being listed and its sub-directories being
+ * peeked are two overlapping reads, and the bar belongs to the last of them to finish.
+ */
+function beginPending(): () => void {
+  pendingReads += 1;
+  if (pendingReads === 1) {
+    pendingTimer = window.setTimeout(() => {
+      document.documentElement.dataset.busy = "reading";
+    }, PENDING_DELAY);
+  }
+  let settled = false;
+  return () => {
+    if (settled) return;
+    settled = true;
+    pendingReads -= 1;
+    if (pendingReads > 0) return;
+    window.clearTimeout(pendingTimer);
+    delete document.documentElement.dataset.busy;
+  };
+}
+
 /** Guards against a slow peek from an abandoned directory landing after a newer one. */
 let renderGeneration = 0;
 
@@ -171,7 +203,12 @@ async function renderDirectory(announce = true, direction: NavigationDirection =
   // opens a file, so this is a readdir per sub-directory, not a metadata sweep.
   const unknown = children.filter((node) => node.kind === "directory" && !node.peek);
   if (unknown.length) {
-    await Promise.all(unknown.map((node) => peekChildren(node)));
+    const settle = beginPending();
+    try {
+      await Promise.all(unknown.map((node) => peekChildren(node)));
+    } finally {
+      settle();
+    }
     if (generation !== renderGeneration) return;
   }
 
@@ -272,18 +309,45 @@ function updateAim(node: FsNode | null): void {
   if (label) label.textContent = node ? `TARGET / ${trimName(node.name, 24)}` : "NO TARGET";
 }
 
+/**
+ * The directory an earlier open is already waiting on, and which open owns that wait.
+ *
+ * A listing that takes its time — a cloud folder being pulled down, a directory of
+ * thousands of entries — leaves nothing on screen to say the double-click landed, and
+ * the natural answer to that is to double-click it again. Each of those used to push
+ * the same directory onto the trail, so one arrival wrote its crumb several times over.
+ */
+let opening: FsNode | null = null;
+let openGeneration = 0;
+
 async function openNode(node: FsNode): Promise<void> {
   if (node.kind === "file") {
     await viewer.open(node, pathFor(node, ancestry));
     return;
   }
+  // Asking twice for the same directory is one arrival, not two.
+  if (opening?.id === node.id) return;
+  const generation = (openGeneration += 1);
+  opening = node;
+  // Where the entry is being made from. Anything that moves the trail while the listing
+  // is still coming — a step back, a crumb, a search result, the camera flying into
+  // another area — leaves this arrival stale, and appending it to a path it no longer
+  // belongs to is how a directory ends up filed under a stranger.
+  const from = currentDirectory();
+  const settle = beginPending();
   setStatus(`Scanning ${node.name}…`);
   try {
     await ensureChildren(node);
+    if (generation !== openGeneration || currentDirectory().id !== from.id) return;
     ancestry.push(node);
     void renderDirectory(true, "forward");
   } catch (error) {
+    if (generation !== openGeneration) return;
     setStatus(error instanceof Error ? error.message : `Unable to open ${node.name}`, true);
+  } finally {
+    settle();
+    // A newer open owns the slot by now; only the current one may give it up.
+    if (generation === openGeneration) opening = null;
   }
 }
 
@@ -351,6 +415,7 @@ async function chooseFolder(): Promise<void> {
  * than a copy, so this reads the folder as it stands now, not as it stood last visit.
  */
 async function mountRememberedDirectory(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  const settle = beginPending();
   try {
     const restored = await rootFromDirectoryHandle(handle);
     const count = restored.root.children?.length ?? 0;
@@ -365,6 +430,8 @@ async function mountRememberedDirectory(handle: FileSystemDirectoryHandle): Prom
     withdrawReopenOffer();
     setStatus(`Could not reopen ${handle.name} — it may have been moved or renamed`, true);
     return false;
+  } finally {
+    settle();
   }
 }
 
