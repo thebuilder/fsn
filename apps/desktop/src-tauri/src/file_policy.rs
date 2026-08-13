@@ -297,6 +297,14 @@ pub fn can_open_native(path: &Path, executable: bool) -> bool {
             .is_some_and(|extension| BLOCKED_OPEN.contains(&extension.as_str()))
 }
 
+pub fn can_open_bundle(path: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +329,15 @@ mod tests {
         ] {
             assert!(!can_edit_text(Path::new(name)), "expected non-text: {name}");
         }
+    }
+
+    #[test]
+    fn only_macos_app_directories_are_native_bundles() {
+        assert_eq!(
+            can_open_bundle(Path::new("Example.app")),
+            cfg!(target_os = "macos")
+        );
+        assert!(!can_open_bundle(Path::new("Example.app/Contents")));
+        assert!(!can_open_bundle(Path::new("Example.bundle")));
     }
 }

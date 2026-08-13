@@ -26,6 +26,7 @@ pub struct NativeEntry {
     is_file: bool,
     is_directory: bool,
     is_symlink: bool,
+    is_native_bundle: bool,
     size: u64,
     modified: Option<u64>,
     readonly: bool,
@@ -142,11 +143,9 @@ pub fn open_native(
     root: State<'_, ActiveRoot>,
     path: PathBuf,
 ) -> Result<(), String> {
-    let file = root.open_file(&path)?;
-    let executable = is_executable(&file)?;
-    if !file_policy::can_open_native(&path, executable) {
-        return Err("Executable and system files cannot be opened from FSN".into());
-    }
+    root.access(&path, |dir, relative| {
+        authorize_native_open(dir, relative, &path)
+    })?;
     let path = path
         .into_os_string()
         .into_string()
@@ -154,6 +153,35 @@ pub fn open_native(
     app.opener()
         .open_path(path, None::<String>)
         .map_err(|_| "Could not open the file in its native application".to_string())
+}
+
+fn authorize_native_open(
+    dir: &cap_std::fs::Dir,
+    relative: &Path,
+    display_path: &Path,
+) -> Result<(), String> {
+    let metadata = dir
+        .symlink_metadata(relative)
+        .map_err(|_| "The selected object is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Symbolic links cannot be opened from FSN".into());
+    }
+    if metadata.is_dir() && file_policy::can_open_bundle(display_path) {
+        return dir
+            .open_dir(relative)
+            .map(|_| ())
+            .map_err(|_| "This application bundle cannot be opened".to_string());
+    }
+    if metadata.is_file() {
+        let file = dir
+            .open(relative)
+            .map(cap_std::fs::File::into_std)
+            .map_err(|_| "This file cannot be opened".to_string())?;
+        if file_policy::can_open_native(display_path, is_executable(&file)?) {
+            return Ok(());
+        }
+    }
+    Err("Executable and system files cannot be opened from FSN".into())
 }
 
 fn read_directory(dir: &cap_std::fs::Dir, display: &Path) -> Result<Vec<NativeEntry>, String> {
@@ -176,6 +204,9 @@ fn read_directory(dir: &cap_std::fs::Dir, display: &Path) -> Result<Vec<NativeEn
         } else {
             None
         };
+        let is_native_bundle = file_type.is_dir()
+            && file_policy::can_open_bundle(&path)
+            && dir.open_dir(&name).is_ok();
         let executable = file
             .as_ref()
             .map(is_executable)
@@ -187,6 +218,7 @@ fn read_directory(dir: &cap_std::fs::Dir, display: &Path) -> Result<Vec<NativeEn
             is_file: file_type.is_file(),
             is_directory: file_type.is_dir(),
             is_symlink: file_type.is_symlink(),
+            is_native_bundle,
             size: metadata.len(),
             modified: modified_millis(
                 metadata
@@ -200,7 +232,8 @@ fn read_directory(dir: &cap_std::fs::Dir, display: &Path) -> Result<Vec<NativeEn
                 && !metadata.permissions().readonly()
                 && metadata.len() <= text_edit::MAX_TEXT_BYTES as u64
                 && file_policy::can_edit_text(&path),
-            can_open_native: file.is_some() && file_policy::can_open_native(&path, executable),
+            can_open_native: is_native_bundle
+                || file.is_some() && file_policy::can_open_native(&path, executable),
         });
     }
     Ok(entries)
@@ -220,6 +253,7 @@ fn directory_entry(dir: &cap_std::fs::Dir, display: &Path) -> Result<NativeEntry
         is_file: false,
         is_directory: true,
         is_symlink: false,
+        is_native_bundle: false,
         size: metadata.len(),
         modified: modified_millis(
             metadata
@@ -299,4 +333,33 @@ pub fn respond_to_macos_quit(
 #[tauri::command]
 pub fn respond_to_macos_quit(_: tauri::AppHandle, _: u64, _: bool) -> Result<(), String> {
     Err("The application-level quit bridge is only available on macOS".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_std::ambient_authority;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_open_accepts_app_bundles_but_not_arbitrary_directories() {
+        let base = std::env::temp_dir().join(format!(
+            "fsn-native-open-{}-{}",
+            std::process::id(),
+            UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("Example.app/Contents")).unwrap();
+        std::fs::create_dir(base.join("ordinary")).unwrap();
+        let dir = cap_std::fs::Dir::open_ambient_dir(&base, ambient_authority()).unwrap();
+
+        assert!(
+            authorize_native_open(&dir, Path::new("Example.app"), &base.join("Example.app"),)
+                .is_ok()
+        );
+        assert!(
+            authorize_native_open(&dir, Path::new("ordinary"), &base.join("ordinary"),).is_err()
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

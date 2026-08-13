@@ -16,6 +16,7 @@ type NativeEntry = {
   isFile: boolean;
   isDirectory: boolean;
   isSymlink: boolean;
+  isNativeBundle: boolean;
   size: number;
   modified: number | null;
   readonly: boolean;
@@ -91,7 +92,7 @@ export async function ensureChildren(parent: FsNode): Promise<FsNode[]> {
 
   const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
   const children: FsNode[] = entries.map((entry) => {
-    const isDirectory = entry.isDirectory && !entry.isSymlink;
+    const isDirectory = entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle;
     const node: FsNode = {
       id: entry.path,
       parentId: parent.id,
@@ -134,7 +135,7 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
           id: entry.path,
           parentId: node.id,
           name: entry.name,
-          kind: entry.isDirectory && !entry.isSymlink ? "directory" : "file",
+          kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
         }),
       ),
     };
@@ -191,7 +192,7 @@ export async function writeDesktopText(
 }
 
 export async function openDesktopNative(node: FsNode): Promise<void> {
-  await invoke("open_native", { path: desktopFilePath(node) });
+  await invoke("open_native", { path: desktopNativePath(node) });
 }
 
 export function canEditDesktopText(node: FsNode): boolean {
@@ -210,6 +211,13 @@ function desktopDirectoryPath(node: FsNode): string | null {
 function desktopFilePath(node: FsNode): string {
   if (node.kind !== "file" || !node.resource?.readable || !node.resource.id) {
     throw new Error("This object has no readable native file in the current session.");
+  }
+  return node.resource.id;
+}
+
+function desktopNativePath(node: FsNode): string {
+  if (node.kind !== "file" || !node.resource?.id) {
+    throw new Error("This object cannot be opened in a native application.");
   }
   return node.resource.id;
 }

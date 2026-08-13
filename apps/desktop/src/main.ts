@@ -68,7 +68,7 @@ const platform: NavigatorPlatform = {
     },
     nativeOpen: {
       supports: (node) => Boolean(
-        node.resource?.readable
+        node.resource
         && !demoResources.has(node.resource.id)
         && canOpenDesktopNative(node),
       ),

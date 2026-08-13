@@ -125,6 +125,18 @@ export class FileViewer {
 
   async open(node: FsNode, path: string): Promise<void> {
     if (this.elements.dialog.open && !this.canDiscard()) return;
+    const renderer = rendererFor(node);
+    const nativeOpen = this.io.nativeOpen;
+    let nativeOpenError: unknown;
+    if (renderer.id === "denied" && nativeOpen?.supports(node)) {
+      this.closeWithoutConfirmation();
+      try {
+        await nativeOpen.open(node);
+        return;
+      } catch (error) {
+        nativeOpenError = error;
+      }
+    }
     this.reset();
     // A size the last object asked for means nothing to this one; a size the reader
     // dragged out themselves is theirs to keep until they open something with an opinion.
@@ -142,7 +154,12 @@ export class FileViewer {
     this.elements.content.focus({ preventScroll: true });
     this.setCollapsed(false);
     this.applyGeometry();
-    await this.dispatch(rendererFor(node), node, path);
+    await this.dispatch(renderer, node, path);
+    if (nativeOpenError && !this.controller.signal.aborted) {
+      this.elements.position.textContent = nativeOpenError instanceof Error
+        ? nativeOpenError.message
+        : "NATIVE OPEN FAILED";
+    }
   }
 
   /** Lets the host window consult the active renderer before it is destroyed. */
