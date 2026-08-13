@@ -766,6 +766,23 @@ function trimName(name: string, length: number): string {
   return name.length > length ? `${name.slice(0, length - 1)}…` : name;
 }
 
+/** Coalesces keystrokes: the walk is synchronous on the frame thread, so re-running it on
+ * every keydown would block rendering for as long as the user keeps typing. */
+const searchRenderDelayMs = 90;
+let searchRenderTimer = 0;
+function scheduleSearchRender(): void {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = window.setTimeout(() => {
+    searchRenderTimer = 0;
+    if (!lifecycle.signal.aborted) renderSearchResults(searchInput.value);
+  }, searchRenderDelayMs);
+}
+function flushSearchRender(): void {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = 0;
+  renderSearchResults(searchInput.value);
+}
+
 folderButton.addEventListener("click", () => void (pendingReopen ? reopenRememberedDirectory(pendingReopen) : chooseFolder()), listener);
 demoButton.addEventListener("click", () => {
   void (async () => {
@@ -775,7 +792,7 @@ demoButton.addEventListener("click", () => {
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
 searchButton.addEventListener("click", openSearch, listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
-searchInput.addEventListener("input", () => renderSearchResults(searchInput.value), listener);
+searchInput.addEventListener("input", scheduleSearchRender, listener);
 searchDialog.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
@@ -786,6 +803,10 @@ searchDialog.addEventListener("keydown", (event) => {
   }
   // Enter from the input opens the highlighted result; the dialog's own buttons keep theirs.
   if (event.key === "Enter" && event.target === searchInput) {
+    // A pending debounced render must land first, or Enter can open whatever the stale
+    // list last highlighted. Only flush when a timer is actually pending — an
+    // unconditional flush would rebuild the list and reset the user's arrow-key selection.
+    if (searchRenderTimer) flushSearchRender();
     const active = resultButtons[activeResultIndex];
     if (!active) return;
     event.preventDefault();

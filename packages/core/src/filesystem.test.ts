@@ -138,4 +138,41 @@ describe("filesystem search", () => {
     expect(outcome.unreadDirectories).toBe(1);
     expect(outcome.complete).toBe(true);
   });
+
+  it("ranks by match quality, not by the walk order of deliberately unsorted siblings", () => {
+    // Children are authored out of alphabetical order and mix directories/files, standing
+    // in for an adapter that (hypothetically) did not pre-sort — the walk no longer sorts
+    // them itself, so result quality must come entirely from the final ranking pass.
+    const root = directory("root", [
+      file("xx-report.txt"),
+      directory("b-dir", [file("report-notes.md")]),
+      file("report.md"),
+      directory("a-dir", [file("has-report-inside.txt")]),
+    ]);
+
+    const outcome = searchFilesystem([root], "report", { limit: 10 });
+
+    // Prefix matches ("report.md", "report-notes.md") rank ahead of word-start matches
+    // ("xx-report.txt", "has-report-inside.txt"); within each rank, the shallower trail
+    // wins — exactly the ordering the final comparator promises, independent of walk order.
+    expect(outcome.matches.map((match) => match.node.name)).toEqual([
+      "report.md",
+      "report-notes.md",
+      "xx-report.txt",
+      "has-report-inside.txt",
+    ]);
+  });
+
+  it("still trips the visit ceiling on an oversized tree without sorting each directory", () => {
+    // One directory holding more entries than the visit limit is enough to prove the
+    // ceiling still trips promptly now that per-directory sorting is gone from the walk.
+    const root = directory("root", Array.from({ length: 20500 }, (_, index) => file(`f-${index}.txt`)));
+
+    const start = performance.now();
+    const outcome = searchFilesystem([root], "nonexistent-query", { limit: 10 });
+    const elapsed = performance.now() - start;
+
+    expect(outcome.complete).toBe(false);
+    expect(elapsed).toBeLessThan(1000);
+  });
 });

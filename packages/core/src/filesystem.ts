@@ -223,14 +223,20 @@ export function searchFilesystem(
   let visited = 0;
   let complete = true;
 
-  while (queue.length) {
-    const trail = queue.shift() as FsNode[];
-    const children = sortNodes(trail[trail.length - 1].children ?? []);
+  // Adapters store `children` sorted at read time, and the ranking below re-orders
+  // every survivor anyway — so sorting here would buy nothing but the cost of an
+  // options-object `localeCompare` per directory visited. An index cursor replaces
+  // popping the array from its front, so growing the frontier stays O(1) instead of O(n).
+  let head = 0;
+  while (head < queue.length) {
+    const trail = queue[head];
+    head += 1;
+    const children = trail[trail.length - 1].children ?? [];
     for (const node of children) {
       visited += 1;
       if (visited > searchVisitLimit) {
         complete = false;
-        queue.length = 0;
+        head = queue.length;
         break;
       }
       if (!normalized || node.name.toLowerCase().includes(normalized)) {
