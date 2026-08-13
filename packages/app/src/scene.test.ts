@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { turnTarget } from "./scene";
+import { labelScaleFor, turnTarget } from "./scene";
 
 const MAX_POLAR = Math.PI * 0.49;
 
@@ -58,5 +58,36 @@ describe("turnTarget", () => {
     const direction = viewDirection(camPos, result);
     expect(direction.y).toBeLessThan(-0.999);
     expect(direction.y).toBeGreaterThan(-1);
+  });
+});
+
+/** Apparent size on screen: a plate's drawn size divided by how far away it is. */
+function apparentSize(distance: number): number {
+  return labelScaleFor(distance) / distance;
+}
+
+describe("labelScaleFor", () => {
+  it("leaves a plate at its drawn size until reading it becomes hard", () => {
+    expect(labelScaleFor(4)).toBe(1);
+    expect(labelScaleFor(26)).toBe(1);
+  });
+
+  it("gives a distant plate back most of the pixels perspective took", () => {
+    // Without growth a plate at 120 would be under a quarter the size of one at 26.
+    expect(apparentSize(120) / apparentSize(26)).toBeGreaterThan(0.4);
+  });
+
+  it("still lets far read as far, so the skyline keeps its depth", () => {
+    expect(apparentSize(120)).toBeLessThan(apparentSize(60));
+    expect(apparentSize(60)).toBeLessThan(apparentSize(26));
+  });
+
+  it("caps the growth, so nothing past the far limit keeps swelling", () => {
+    expect(labelScaleFor(150)).toBeCloseTo(2.4, 5);
+    expect(labelScaleFor(400)).toBe(2.4);
+  });
+
+  it("grows smoothly, with no step at the distance it starts", () => {
+    expect(labelScaleFor(26.001)).toBeCloseTo(1, 4);
   });
 });
