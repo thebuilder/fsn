@@ -27,12 +27,15 @@ export async function render(host: ViewerHost): Promise<void> {
   if (directory.comment) frame.append(el("p", "manifest-comment", directory.comment));
   frame.append(manifestTable(directory.entries));
   frame.append(el("p", "manifest-note", "Contents are listed from the archive index. FSN does not extract or execute archived objects."));
+  if (directory.truncated) {
+    frame.append(el("p", "manifest-note", `The archive index could not be fully read; entries beyond ${directory.entries.length} are not listed.`));
+  }
   host.mount(frame);
 
   const ratio = directory.uncompressedTotal
     ? ` / ${Math.round((1 - directory.compressedTotal / directory.uncompressedTotal) * 100)}% SAVED`
     : "";
-  host.setStatus(`${files.length} OBJECTS${folders ? ` / ${folders} DIRS` : ""} / ${formatBytes(directory.uncompressedTotal)}${ratio}`);
+  host.setStatus(`${files.length} OBJECTS${folders ? ` / ${folders} DIRS` : ""} / ${formatBytes(directory.uncompressedTotal)}${ratio}${directory.truncated ? " / PARTIAL INDEX" : ""}`);
 }
 
 function manifestTable(entries: ZipEntry[]): HTMLElement {

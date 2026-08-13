@@ -13,6 +13,8 @@ export type ZipDirectory = {
   comment: string;
   compressedTotal: number;
   uncompressedTotal: number;
+  /** True when the central directory ended before `entries` reached the count the EOCD promised. */
+  truncated: boolean;
 };
 
 const EOCD = 0x06054b50;
@@ -87,7 +89,7 @@ export function readZipDirectory(bytes: Uint8Array, baseOffset = 0): ZipDirector
     offset += 46 + nameLength + extraLength + commentSize;
   }
 
-  return { entries, comment, compressedTotal, uncompressedTotal };
+  return { entries, comment, compressedTotal, uncompressedTotal, truncated: entries.length < count };
 }
 
 /** The EOCD sits at the end but may trail up to 64 KB of archive comment. */
