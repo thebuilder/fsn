@@ -1,0 +1,66 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!dist",
+      "!apps/web/dist",
+      "!apps/desktop/dist",
+      "!.turbo",
+      "!apps/desktop/src-tauri/target",
+      "!apps/desktop/src-tauri/gen",
+      "!plans",
+      "!pnpm-lock.yaml",
+      "!packages/app/src/assets",
+      "!apps/web/public",
+      "!docs",
+      // Scoped to JS/TS only: this plan is "a mechanical reviewer for
+      // TypeScript." Biome's recommended preset also reaches into CSS and
+      // HTML (a11y, specificity, !important), which is real but belongs to
+      // a future styling/a11y pass, not this one.
+      "!**/*.css",
+      "!**/*.html"
+    ]
+  },
+  "formatter": {
+    // Deliberately off: the repo's hand-formatting is already consistent
+    // (2-space, double quotes, semicolons), and a reformat now would blow
+    // up blame for no benefit. Revisit as one isolated commit later.
+    "enabled": false
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "off"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // Post-guard `!` is deliberate house style; the strict tsconfig
+        // already carries the type-narrowing burden.
+        "noNonNullAssertion": "off",
+        // `Math.pow` is the established house spelling in the scene math;
+        // a mechanical swap to `**` buys nothing.
+        "useExponentiationOperator": "off"
+      },
+      "suspicious": {
+        // Concise-arrow `forEach(x => doThing(x))` returning a value is the
+        // pervasive house pattern; forcing braces everywhere is churn
+        // without a safety payoff.
+        "useIterableCallbackReturn": "off",
+        // Assignment-in-expression (e.g. cache-populate patterns) is used
+        // deliberately and readably here.
+        "noAssignInExpressions": "off"
+      }
+    }
+  }
+}

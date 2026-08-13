@@ -39,10 +39,15 @@ relevant one before calling anything done.
 ## Conventions
 
 - TypeScript strict mode. 2-space indent, double quotes, semicolons.
-- No linter or formatter config exists today. Don't assume Prettier/ESLint
-  conventions beyond what's already in the file you're editing; match the
-  surrounding code by eye. (If a `biome.json` has since appeared at the root,
-  a linter exists now — run `pnpm lint` and ignore this paragraph.)
+- Linting is Biome, lint-only, via `pnpm lint` (also runs first in
+  `pnpm check`). Config lives in `biome.jsonc`, scoped to JS/TS only —
+  CSS and HTML are deliberately excluded from linting for now (real a11y
+  and CSS findings exist there; that's a future styling/a11y pass, not an
+  oversight). Biome's formatter is deliberately off: the repo's
+  hand-formatting is already consistent, and turning on the formatter now
+  would blow up blame for no benefit. Don't assume Prettier/ESLint
+  conventions beyond what's already in the file you're editing or what
+  `biome.jsonc` enforces; match the surrounding code by eye.
 - Comments explain *why*, in full sentences, often a short paragraph.
   Trivial restatement-of-code comments are not this codebase's style. See
   `packages/app/src/navigator.ts:121-138` (the `RouteIntent` doc comment) or
@@ -62,7 +67,10 @@ relevant one before calling anything done.
 - **No Turbopack.** Turborepo orchestrates tasks; Turbopack (the Next.js
   bundler) is intentionally not used — FSN is a Vite app, and Tauri supports
   Vite directly. Don't suggest migrating to Next.js or swapping the bundler.
-- **No linter.** See Conventions above; this may change later.
+- **No formatter.** Biome is lint-only here (see Conventions above); its
+  formatter stays off deliberately so the existing hand-formatting and
+  blame history aren't disturbed. Enabling it later should be one isolated
+  commit, not folded into an unrelated change.
 - **The web app is read-only by design.** Only `apps/desktop` edits files.
   Don't add file-write affordances to `apps/web`.
 
