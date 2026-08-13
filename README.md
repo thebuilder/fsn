@@ -1,15 +1,34 @@
 # FSN: 3D File System Navigator
 
-A browser-based tribute to SGI's File System Navigator. It renders one directory at a time as a deterministic WebGL city and keeps local file access read-only.
+A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a deterministic WebGL city. The web app is read-only; the Tauri desktop app can edit UTF-8 text and open files in their native application.
 
 ## Run locally
 
 ```sh
 pnpm install
-pnpm dev
+pnpm dev:web
 ```
 
 Then open the local URL printed by Vite.
+
+To run the native app, install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system, then run:
+
+```sh
+pnpm dev:desktop
+```
+
+## Workspace architecture
+
+FSN is a pnpm workspace with two deliberately separate application shells:
+
+| Workspace | Responsibility |
+| --- | --- |
+| `apps/web` | Browser filesystem adapter, remembered browser handles, Vercel Analytics, and web metadata. |
+| `apps/desktop` | Tauri v2 shell, native filesystem adapter, capabilities, Rust commands, and desktop packaging. |
+| `packages/core` | Platform-neutral filesystem model, classification, search, formatting, and parsers. |
+| `packages/app` | Shared navigator controller, WebGL scene, viewers, styles, shell markup, and demo assets. |
+
+[Turborepo](https://turborepo.com/docs) orchestrates and caches workspace tasks. Turbopack is intentionally not used here: it is the Next.js bundler, while FSN is a Vite application and [Tauri supports Vite directly](https://v2.tauri.app/start/frontend/vite/). This keeps web and desktop isolated without migrating the working app to Next.js.
 
 ## Controls
 
@@ -26,7 +45,7 @@ Each viewer is loaded on demand, so a session only downloads the readers it uses
 
 | Object | Viewer |
 | --- | --- |
-| Text, code, Markdown, logs | SimpleText pane with line numbers. Extensionless files (`Makefile`, `LICENSE`, dotfiles) are recognised by name. |
+| UTF-8 text, source, Markdown/MDX, YAML, config, templates, logs | SimpleText pane with line numbers. Extensionless files (`Makefile`, `LICENSE`, known lockfiles, dotfiles) are recognised by name. |
 | Images | Canvas viewer with a real resampling pixel filter. Animated GIF/APNG/WebP are decoded frame by frame so the filter does not freeze them. |
 | 3D models (`.stl`, `.obj`, `.ply`, `.glb`, `.gltf`) | Orbitable mesh inspector with wireframe and spin toggles. |
 | Audio and video | Player with custom transport controls and switchable visualizers (see below). |
@@ -75,17 +94,43 @@ since a buffer of silence meeting live audio puts a vertical cliff across the ro
 
 The **Open folder** control uses the File System Access API where available. Other browsers fall back to a `webkitdirectory` directory snapshot. Neither mode uploads filenames, metadata, or file contents; all rendering and previewing happens in the browser. The application never writes to selected files.
 
+The desktop app asks Tauri for access only to a directory selected through the native picker. A Rust-owned active-root capability validates every native filesystem command; choosing another folder or returning to the demo revokes the old root. There is no static home-directory or global filesystem scope.
+
+- **Open in native app** passes the selected file to a Rust command that canonicalizes it, verifies it is an allowed regular file, and only then opens it.
+- **Text editing** accepts valid UTF-8 files, preserves BOM and line endings, saves only after an explicit click, warns about unsaved changes, checks content/identity snapshots immediately before saving, and uses atomic replacement to avoid partial writes.
+- Demo objects remain read-only and never receive native actions.
+
 ## Verification
 
 ```sh
-pnpm test
-pnpm build
+pnpm check
 ```
 
-The demo model in `public/demo-models` is generated; regenerate it with:
+That runs all TypeScript checks, tests, and both Vite webview builds. Verify the Rust application separately with:
 
 ```sh
-node tools/make-demo-model.mjs
+cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Create a local desktop bundle for the current operating system with:
+
+```sh
+pnpm build:desktop
+```
+
+Push a version tag matching `apps/desktop/package.json` to create an unsigned Apple Silicon draft prerelease:
+
+```sh
+pnpm validate:desktop-release v0.1.0
+git tag -a v0.1.0 -m "FSN desktop v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow verifies the workspace and Rust backend before uploading the app and DMG. Signing and notarization remain separate release steps. The shared demo model is generated; regenerate it with:
+
+```sh
+node packages/app/tools/make-demo-model.mjs
 ```
 
 ## Credits

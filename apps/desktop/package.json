@@ -1,0 +1,26 @@
+{
+  "name": "@fsn/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:webview": "vite",
+    "build": "tsc && vite build",
+    "build:webview": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@fsn/app": "workspace:*",
+    "@fsn/core": "workspace:*",
+    "@tauri-apps/api": "2.11.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2"
+  }
+}

@@ -1,0 +1,833 @@
+@layer reset, base, components, utilities;
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; }
+  button, input { font: inherit; }
+  button { color: inherit; }
+  svg { display: block; }
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --void: #05090a;
+    --panel: rgba(8, 17, 17, 0.86);
+    --panel-solid: #0b1515;
+    --line: rgba(132, 255, 224, 0.22);
+    --line-strong: rgba(132, 255, 224, 0.55);
+    --phosphor: #86fadd;
+    --phosphor-bright: #d9ffef;
+    --muted: #87a39d;
+    --signal: #ff5b82;
+    --signal-soft: #e84970;
+    --amber: #ffbc57;
+    --violet: #b890ff;
+    --blue: #8dbdf5;
+    --sans: "Helvetica Neue", Inter, Arial, sans-serif;
+    --mono: "SFMono-Regular", "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+    /* The house entrance curve: leaves immediately, settles late. */
+    --ease-out: cubic-bezier(.2, .7, .3, 1);
+  }
+
+
+  body {
+    overflow: hidden;
+    background: var(--void);
+    color: #e9f6f1;
+    font-family: var(--sans);
+    text-rendering: optimizeLegibility;
+  }
+
+  body::after {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    pointer-events: none;
+    content: "";
+    background: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0, 0, 0, 0.09) 3px 4px);
+    mix-blend-mode: multiply;
+  }
+
+  button { border: 0; }
+  [hidden] { display: none !important; }
+  :where(button, input, [tabindex]):focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: 3px; }
+  ::selection { background: var(--signal); color: #fff; }
+
+  .eyebrow {
+    margin: 0;
+    color: var(--phosphor);
+    font: 700 0.625rem/1.2 var(--mono);
+    letter-spacing: 0.18em;
+  }
+}
+
+@layer components {
+  /**
+   * Nothing is drawn until the app knows which world it is drawing.
+   *
+   * The demo is mounted at startup as the fallback, and reading the last visit out of
+   * IndexedDB takes a few frames — long enough for a demo title and a demo skyline to
+   * flash past before the folder you actually left open replaces them. A beat of black
+   * is cheaper than a glimpse of the wrong filesystem.
+   *
+   * The failsafe matters more than the fade: should the boot never resolve, the
+   * interface still arrives rather than stranding someone on an empty page. Its
+   * duration has to be real — a zero-length animation counts as already finished, and
+   * fills its end state over the hidden one immediately.
+   */
+  #app { position: fixed; inset: 0; isolation: isolate; opacity: 1; transition: opacity 300ms var(--ease-out); }
+  :root[data-boot="pending"] #app { opacity: 0; animation: boot-failsafe 300ms 4s var(--ease-out) forwards; }
+  #world { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; transition: filter 400ms ease, opacity 400ms ease; }
+  /**
+   * There is no world yet while the welcome screen is deciding which one to draw. The
+   * backdrop only dims what is behind it, so a held skyline still reads through as a
+   * lit plate with its objects laid flat — the reveal spoiled before it is offered.
+   * The canvas sits dark instead, and fades up as the reveal it belongs to starts.
+   */
+  :root[data-welcome="held"] #world { opacity: 0; }
+  /**
+   * And the interface waits for the backdrop rather than racing it. Two fades multiplied
+   * together peak brighter than either one settles: the frame reaches full while the
+   * scrim is still half applied and nothing is dimming it yet, so the heading flashes up
+   * some three times brighter than the value it was always going to hold, then sinks
+   * back. Following the backdrop in costs a beat and means it only ever rises.
+   */
+  :root[data-welcome="held"] #app { transition-delay: 300ms; }
+  /**
+   * An entrance owed is an entrance not yet spent, so whatever is holding its animation
+   * holds its visibility with it. Drawn behind the screen and then animated on dismissal,
+   * the heading reads as the same words arriving twice — the second time as a reset.
+   */
+  :root[data-welcome="held"] :is(.scene-title, .breadcrumbs) { visibility: hidden; }
+  .scene-switching #world { filter: brightness(1.55) saturate(0.7); opacity: 0.7; }
+
+  .skip-link {
+    position: fixed;
+    z-index: 300;
+    top: 0.75rem;
+    left: 0.75rem;
+    transform: translateY(-200%);
+    padding: 0.65rem 0.85rem;
+    background: var(--phosphor-bright);
+    color: var(--void);
+    font: 700 0.75rem var(--mono);
+  }
+  .skip-link:focus { transform: translateY(0); }
+
+  .topbar {
+    position: absolute;
+    z-index: 10;
+    inset: 0 0 auto;
+    min-height: 4.5rem;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(4, 9, 10, 0.96), rgba(4, 9, 10, 0.78));
+    backdrop-filter: blur(16px);
+  }
+
+  .brand { display: flex; align-items: center; gap: 0.75rem; color: inherit; text-decoration: none; }
+  .brand > span:last-child { display: grid; gap: 0.15rem; }
+  .brand strong { font: 800 1rem/1 var(--mono); letter-spacing: 0.16em; }
+  .brand small { color: var(--muted); font: 500 0.55rem/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+  /* The stack steps downwards, so what is painted hangs below the box it is centred in
+     and the mark reads as sagging off the row. Offset back up by half that step, which
+     scales with the mark and so holds at both sizes it is drawn at. */
+  .brand-mark { position: relative; top: -0.19rem; width: 2.25rem; height: 2.25rem; transform: rotate(-8deg); }
+  .brand-mark i { position: absolute; inset: 0.1rem 0.55rem; border: 1px solid var(--phosphor); background: rgba(134, 250, 221, 0.04); transform: skewY(-27deg); box-shadow: 0 0 12px rgba(134, 250, 221, 0.15); }
+  .brand-mark i:nth-child(2) { transform: translateX(0.32rem) translateY(0.24rem) skewY(-27deg); opacity: 0.65; }
+  .brand-mark i:nth-child(3) { transform: translateX(0.64rem) translateY(0.48rem) skewY(-27deg); opacity: 0.32; }
+
+  .breadcrumbs { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 0.35rem; overflow: hidden; }
+  .breadcrumbs button {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.35rem 0.45rem;
+    background: transparent;
+    color: var(--muted);
+    font: 650 0.7rem/1 var(--mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .breadcrumbs button:hover { color: var(--phosphor-bright); }
+  .breadcrumbs button[aria-current="page"] { color: #fff; }
+  .breadcrumbs button.is-entering { animation: crumb-in 260ms cubic-bezier(.2, .7, .3, 1) backwards; }
+  .breadcrumbs span { color: rgba(134, 250, 221, 0.3); font: 0.7rem var(--mono); }
+
+  /**
+   * Sits on the topbar's own bottom edge, so it reports on the path it is about to
+   * change rather than floating somewhere of its own. Out of flow, which keeps it
+   * clear of the grid the topbar lays its three sections out on.
+   *
+   * Indeterminate: a directory listing cannot say how far through itself it is, and a
+   * bar that guesses at a fraction is a worse answer than one that only says "still
+   * reading". It fades rather than cuts, because it arrives 300ms into a wait that may
+   * end on the next tick, and a hard flash there reads as an error.
+   *
+   * Idle it is `visibility: hidden`, not merely transparent, which is what takes it out
+   * of the accessibility tree: it reports itself as a progress bar, and one of those
+   * sitting in the tree at all hours, progressing at nothing, is worse than none. The
+   * visibility switch waits out the fade on the way down and leads it on the way up, so
+   * the bar is only ever in the tree while it is on screen.
+   */
+  .loading-bar {
+    position: absolute;
+    z-index: 1;
+    inset: auto 0 -1px;
+    height: 3px;
+    overflow: hidden;
+    visibility: hidden;
+    opacity: 0;
+    background: rgba(134, 250, 221, 0.1);
+    transition: opacity 200ms var(--ease-out), visibility 0s linear 200ms;
+    pointer-events: none;
+  }
+  :root[data-busy] .loading-bar { visibility: visible; opacity: 1; transition: opacity 200ms var(--ease-out), visibility 0s; }
+  .loading-bar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 34%;
+    /* Held flat across the middle: a plain two-stop fade leaves so little of a line
+       this thin at full strength that the sweep reads as a smudge rather than a light. */
+    background: linear-gradient(90deg, transparent, var(--phosphor) 35% 65%, transparent);
+    box-shadow: 0 0 12px rgba(134, 250, 221, 0.5);
+  }
+  /* Declared on the busy state rather than paused out of it, so each wait starts its
+     sweep from the left edge instead of resuming wherever the last one was stopped —
+     and nothing is animating on a page whose every frame belongs to the scene. */
+  :root[data-busy] .loading-bar i { animation: load-sweep 1.15s ease-in-out infinite; }
+
+  .top-actions, .welcome-actions { display: flex; align-items: center; gap: 0.5rem; }
+  .button, .icon-button, .tool-toggle, .key-button {
+    min-height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 0.18rem;
+    padding: 0.55rem 0.8rem;
+    font: 750 0.65rem/1 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+  }
+  .button:hover, .icon-button:hover { transform: translateY(-1px); }
+  .button svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .button-primary { background: var(--signal); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 0 18px rgba(255,91,130,.12); }
+  .button-primary:hover { background: #ff7394; }
+  .button-secondary { border-color: var(--line); background: rgba(14, 31, 30, 0.8); color: var(--phosphor); }
+  .button-secondary:hover { border-color: var(--line-strong); background: rgba(24, 52, 48, 0.85); }
+  .icon-button { width: 2.25rem; padding: 0; border-color: var(--line); background: rgba(9, 20, 20, 0.76); color: var(--phosphor); }
+  .icon-button svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; }
+
+  .scene-title {
+    position: absolute;
+    z-index: 3;
+    top: 6.25rem;
+    left: 50%;
+    width: min(36rem, 64vw);
+    transform: translateX(-50%);
+    text-align: center;
+    pointer-events: none;
+    text-shadow: 0 2px 18px rgba(0,0,0,.95);
+  }
+  .scene-title.is-entering > * { animation: title-in 320ms cubic-bezier(.2, .7, .3, 1) backwards; }
+  .scene-title.is-entering > :nth-child(2) { animation-delay: 40ms; }
+  .scene-title.is-entering > :nth-child(3) { animation-delay: 80ms; }
+  .scene-title h1 { margin: 0.35rem 0 0.3rem; font: 500 clamp(1.6rem, 3vw, 2.8rem)/1 var(--sans); letter-spacing: -0.04em; }
+  .scene-title > p:last-child { margin: 0; color: #9bb0aa; font: 600 0.65rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .details-panel {
+    position: absolute;
+    z-index: 5;
+    top: 6rem;
+    left: 1rem;
+    width: min(17.5rem, calc(100vw - 2rem));
+    border: 1px solid var(--line);
+    background: var(--panel);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 1rem 3rem rgba(0,0,0,.24);
+  }
+  .panel-accent { height: 0.16rem; background: linear-gradient(90deg, var(--signal) 0 28%, var(--phosphor) 28% 34%, transparent 34%); }
+  .details-heading { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); align-items: center; gap: 0.75rem; padding: 1rem; border-bottom: 1px solid var(--line); }
+  .details-heading h2 { overflow: hidden; margin: 0.28rem 0 0; font: 600 0.95rem/1.2 var(--sans); text-overflow: ellipsis; white-space: nowrap; }
+  .file-glyph, .result-glyph { --glyph-color: var(--muted); display: block; border: 1px solid color-mix(in srgb, var(--glyph-color) 72%, transparent); background: color-mix(in srgb, var(--glyph-color) 18%, transparent); box-shadow: inset -0.35rem -0.35rem 0 color-mix(in srgb, var(--glyph-color) 9%, transparent), 0 0 14px color-mix(in srgb, var(--glyph-color) 13%, transparent); }
+  .file-glyph { position: relative; width: 2.6rem; height: 2.6rem; }
+  .file-glyph::after { position: absolute; right: -1px; bottom: -1px; width: 40%; height: 40%; content: ""; border-top: 1px solid var(--glyph-color); border-left: 1px solid var(--glyph-color); }
+  .category-directory, .result-glyph.category-directory { --glyph-color: var(--signal); border-radius: 0; }
+  .category-code, .result-glyph.category-code { --glyph-color: var(--phosphor); }
+  .category-image, .result-glyph.category-image { --glyph-color: var(--amber); }
+  .category-audio, .result-glyph.category-audio { --glyph-color: var(--violet); }
+  .category-video, .result-glyph.category-video { --glyph-color: #ff8656; }
+  .category-document, .result-glyph.category-document { --glyph-color: var(--blue); }
+  .category-archive, .result-glyph.category-archive { --glyph-color: #e6de6d; }
+  .category-model, .result-glyph.category-model { --glyph-color: #5ce88a; }
+  .category-font, .result-glyph.category-font { --glyph-color: #4fc6e8; }
+  .category-system, .result-glyph.category-system { --glyph-color: #ff5a65; }
+  .category-unknown, .result-glyph.category-unknown { --glyph-color: #899496; }
+  .details-panel dl { margin: 0; padding: 0.35rem 1rem 0.6rem; }
+  .details-panel dl > div { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 0.5rem; padding: 0.55rem 0; border-bottom: 1px solid rgba(132,255,224,.09); }
+  .details-panel dt { color: var(--muted); font: 650 0.58rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+  .details-panel dd { overflow: hidden; margin: 0; color: #d9e8e3; font: 500 0.62rem/1.35 var(--mono); text-align: end; text-overflow: ellipsis; white-space: nowrap; }
+  .enter-button { width: calc(100% - 2rem); margin: 0.35rem 1rem 1rem; }
+  .enter-button svg { width: 1.125rem; height: 1.125rem; stroke-width: 2.25; }
+
+  .legend {
+    position: absolute;
+    z-index: 4;
+    right: 1rem;
+    bottom: 4.2rem;
+    width: 10.5rem;
+    padding: 0.85rem;
+    border: 1px solid var(--line);
+    background: rgba(7, 15, 15, 0.78);
+    backdrop-filter: blur(10px);
+  }
+  .legend ul { display: grid; gap: 0.5rem; margin: 0.75rem 0 0; padding: 0; list-style: none; }
+  .legend li { display: flex; align-items: center; gap: 0.55rem; color: #afc0ba; font: 600 0.58rem var(--mono); text-transform: uppercase; }
+  .swatch { width: 0.65rem; height: 0.65rem; border: 1px solid rgba(255,255,255,.35); background: var(--swatch); box-shadow: 0 0 8px color-mix(in srgb, var(--swatch) 42%, transparent); }
+  .swatch-directory { --swatch: var(--signal); }
+  .swatch-code { --swatch: var(--phosphor); }
+  .swatch-media { --swatch: var(--amber); }
+  .swatch-document { --swatch: var(--blue); }
+  .swatch-archive { --swatch: #e6de6d; }
+
+  .controls {
+    position: absolute;
+    z-index: 4;
+    bottom: 1rem;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    transform: translateX(-50%);
+    color: var(--muted);
+    font: 550 0.55rem var(--mono);
+    white-space: nowrap;
+  }
+  .controls p { margin: 0; }
+  /* Both readings of a key sit in one cell, so the strip keeps its width and nothing
+     shuffles sideways at the moment Alt goes down. */
+  .controls .role { display: inline-grid; }
+  .controls .role > span { grid-area: 1 / 1; }
+  .controls .role-alt, .controls.is-swapped .role-default { visibility: hidden; }
+  .controls.is-swapped .role-alt { visibility: visible; }
+  .controls.is-swapped .key-alt { border-color: var(--phosphor); background: rgba(23,64,58,.9); color: var(--phosphor-bright); }
+  kbd { min-width: 1.35rem; display: inline-flex; justify-content: center; border: 1px solid rgba(134,250,221,.24); border-bottom-color: rgba(134,250,221,.48); border-radius: 0.15rem; padding: 0.18rem 0.3rem; background: rgba(11,26,25,.85); color: #d9efe8; font: 650 0.52rem var(--mono); box-shadow: 0 2px 0 rgba(0,0,0,.45); }
+
+  .reticle { position: absolute; z-index: 2; top: 50%; left: 50%; width: 1.25rem; height: 1.25rem; visibility: hidden; opacity: 0; transform: translate(-50%,-50%); border: 1px solid rgba(134,250,221,.32); border-radius: 50%; pointer-events: none; transition: width 120ms ease, height 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease, visibility 0s linear 120ms; }
+  .reticle.is-keyboard-active { visibility: visible; opacity: 1; transition-delay: 0s; }
+  .reticle::before, .reticle::after { position: absolute; content: ""; background: rgba(134,250,221,.45); }
+  .reticle::before { top: 50%; left: -0.4rem; width: 2rem; height: 1px; }
+  .reticle::after { top: -0.4rem; left: 50%; width: 1px; height: 2rem; }
+  .reticle i { position: absolute; inset: 0.46rem; background: var(--phosphor); box-shadow: 0 0 8px var(--phosphor); }
+  .reticle span { position: absolute; top: 1.75rem; left: 50%; width: max-content; max-width: 15rem; overflow: hidden; transform: translateX(-50%); padding: 0.28rem 0.42rem; border: 1px solid transparent; background: rgba(3,10,10,.86); color: var(--phosphor-bright); font: 700 0.5rem/1 var(--mono); letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; opacity: 0; transition: opacity 120ms ease; }
+  .reticle.has-target { width: 1.65rem; height: 1.65rem; border-color: var(--phosphor-bright); box-shadow: 0 0 12px rgba(134,250,221,.4), inset 0 0 8px rgba(134,250,221,.18); }
+  .reticle.has-target i { inset: 0.62rem; background: #fff; }
+  .reticle.has-target span { border-color: var(--line-strong); opacity: 1; }
+
+  .hover-label { position: fixed; z-index: 12; top: 0; left: 0; max-width: 16rem; overflow: hidden; padding: 0.4rem 0.55rem; border-left: 2px solid var(--phosphor); background: rgba(3,10,10,.9); color: var(--phosphor-bright); font: 650 0.58rem var(--mono); text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+
+  .status { position: absolute; z-index: 4; bottom: 1rem; left: 1rem; display: flex; align-items: center; gap: 0.45rem; color: #86a59c; font: 600 0.55rem var(--mono); text-transform: uppercase; }
+  .status i, .viewer-led { width: 0.45rem; height: 0.45rem; display: inline-block; border-radius: 50%; background: var(--phosphor); box-shadow: 0 0 8px var(--phosphor); animation: led-pulse 2.5s infinite; }
+  .status.is-error { color: #ff90a8; }
+  .status.is-error i { background: var(--signal); box-shadow: 0 0 8px var(--signal); }
+
+  dialog { color: inherit; }
+  dialog::backdrop { background: rgba(1, 5, 6, 0.72); backdrop-filter: blur(5px) saturate(.65); }
+  /**
+   * `clip`, not `hidden`: the sweep below travels past the bottom edge, which counts as
+   * scrollable overflow, and a dialog that can scroll is one the browser will scroll to
+   * keep the autofocused button in view — leaving the heading parked above the frame.
+   * `clip` contains the sweep without ever making this a scroll container.
+   */
+  .welcome-dialog { width: min(44rem, calc(100vw - 2rem)); overflow: clip; padding: 0; border: 1px solid var(--line-strong); background: #091212; box-shadow: 0 2rem 7rem #000, 0 0 60px rgba(105,249,216,.08); }
+  /**
+   * The front door. It is shown once per machine, so its arrival is a set piece: the
+   * panel resolves out of a blur like a screen coming up to power, and everything
+   * inside it — grid, skyline, then the copy line by line — follows on its own beat.
+   *
+   * Opacity and transform stay on the transition, which is the half that has to run in
+   * both directions: `allow-discrete` keeps the element in the top layer long enough for
+   * the closing half to be seen, and a transition cannot be started off a keyframe
+   * animation that was cancelled in the same style change, which is what removing
+   * `[open]` does. Scale stays near 1 because a modal this large magnifies any travel.
+   * Leaving is quicker than arriving — dismissing it is a decision already made.
+   *
+   * Which leaves the animation only `filter`, a property with no closing half to lose.
+   */
+  .welcome-dialog, .welcome-dialog::backdrop {
+    transition: opacity 170ms var(--ease-out), transform 170ms var(--ease-out), overlay 170ms allow-discrete, display 170ms allow-discrete;
+  }
+  /**
+   * The columns belong to the closed state, not to `[open]`. `display` survives the exit
+   * on its discrete transition, so a track list declared alongside it would not: the
+   * grid would drop to one column for the whole 170ms and the panels would restack into
+   * a tall dialog on the way out. Only `display` itself has any business being on `[open]`.
+   */
+  .welcome-dialog { opacity: 0; transform: scale(.975) translateY(.75rem); grid-template-columns: 0.9fr 1.1fr; }
+  .welcome-dialog::backdrop { opacity: 0; }
+  .welcome-dialog[open] { display: grid; opacity: 1; transform: none; transition-duration: 520ms; animation: welcome-resolve 520ms var(--ease-out) backwards; }
+  /* The backdrop is plainer by design: it has one job, and blur is dear enough to run once. */
+  .welcome-dialog[open]::backdrop { opacity: 1; transition-duration: 320ms; }
+  @starting-style {
+    .welcome-dialog[open] { opacity: 0; transform: scale(.975) translateY(.75rem); }
+    .welcome-dialog[open]::backdrop { opacity: 0; }
+  }
+
+  /* The sweep: one pass of the beam down the panel, timed to arrive with the skyline. */
+  .welcome-dialog[open]::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent 44%, rgba(134,250,221,.16) 50%, transparent 56%);
+    animation: welcome-sweep 1s 160ms var(--ease-out) both;
+  }
+
+  .welcome-visual { position: relative; display: grid; min-height: 22rem; overflow: hidden; padding: 1.25rem; border-right: 1px solid var(--line); background: radial-gradient(circle at 50% 60%, rgba(100,255,216,.12), transparent 55%), #050b0b; }
+  /* The body's scanlines are painted under the top layer, so the dialog lays its own. */
+  .welcome-visual::before {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    content: "";
+    pointer-events: none;
+    background: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,.16) 3px 4px);
+  }
+  /* preserveAspectRatio centres the artwork, so the SVG can safely fill its box. */
+  .welcome-art { width: 100%; height: 100%; min-height: 0; filter: drop-shadow(0 1.25rem 1.5rem rgba(0,0,0,.55)); }
+  /* fill-box, or a group's percentage origin resolves against the whole SVG viewport. */
+  .welcome-art :is(.welcome-halo, .welcome-floor, .welcome-column) { transform-box: fill-box; }
+  .welcome-dialog[open] .welcome-halo { transform-origin: 50% 50%; animation: halo-in 900ms 60ms var(--ease-out) both, halo-breathe 7s 960ms ease-in-out infinite; }
+  .welcome-dialog[open] .welcome-floor { transform-origin: 50% 46%; animation: floor-in 760ms 120ms var(--ease-out) both; }
+  /* Each column rises out of the grid it stands on, one after the next. */
+  .welcome-dialog[open] .welcome-column { transform-origin: 50% 100%; animation: column-rise 620ms var(--ease-out) backwards; }
+  .welcome-dialog[open] .welcome-column:nth-child(1) { animation-delay: 260ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(2) { animation-delay: 315ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(3) { animation-delay: 370ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(4) { animation-delay: 425ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(5) { animation-delay: 480ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(6) { animation-delay: 535ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(7) { animation-delay: 590ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(8) { animation-delay: 645ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(9) { animation-delay: 700ms; }
+  .welcome-dialog[open] .welcome-column:nth-child(10) { animation-delay: 755ms; }
+
+  .welcome-copy { display: flex; flex-direction: column; align-items: start; justify-content: center; padding: 2.5rem; }
+  .welcome-copy h2 { margin: 0.65rem 0 1rem; font: 550 2.75rem/.95 var(--sans); letter-spacing: -0.06em; text-wrap: balance; }
+  .welcome-copy h2 span { display: block; }
+  .welcome-copy > p:not(.eyebrow) { max-width: 33rem; margin: 0 0 1.5rem; color: #a8bbb5; font-size: 0.88rem; line-height: 1.6; }
+  .welcome-copy small { margin-top: 1.25rem; color: #738c85; font: 600 0.57rem var(--mono); text-transform: uppercase; }
+  /* The status line reports itself the way the machine would, a character at a time. */
+  .welcome-copy .eyebrow::after { display: inline-block; width: .5em; height: .95em; content: ""; background: var(--phosphor); vertical-align: -.12em; }
+  .welcome-dialog[open] .welcome-copy .eyebrow { animation: type-in 560ms 180ms steps(13) both; }
+  .welcome-dialog[open] .welcome-copy .eyebrow::after { animation: caret-blink 1.1s 740ms steps(1) infinite backwards; }
+  /* The headline arrives a line at a time, each one wiped in over its own rise. */
+  .welcome-dialog[open] .welcome-copy h2 span { animation: line-in 620ms var(--ease-out) both; }
+  .welcome-dialog[open] .welcome-copy h2 span:first-child { animation-delay: 300ms; }
+  .welcome-dialog[open] .welcome-copy h2 span:last-child { animation-delay: 390ms; }
+  /* The buttons rise themselves rather than as a block, so the pair lands one then the other. */
+  .welcome-dialog[open] .welcome-copy > p:not(.eyebrow) { animation: copy-rise 520ms 500ms var(--ease-out) backwards; }
+  .welcome-dialog[open] .welcome-actions .button { animation: copy-rise 520ms 580ms var(--ease-out) backwards; }
+  .welcome-dialog[open] .welcome-actions .button:last-child { animation-delay: 650ms; }
+  .welcome-dialog[open] .welcome-copy > small { animation: copy-rise 520ms 720ms var(--ease-out) backwards; }
+
+  .search-dialog { width: min(36rem, calc(100vw - 2rem)); margin-top: 11vh; padding: 0; border: 1px solid var(--line-strong); background: var(--panel-solid); box-shadow: 0 2rem 5rem rgba(0,0,0,.7), 0 0 50px rgba(134,250,221,.08); }
+  .search-dialog form { margin: 0; }
+  .search-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.75rem; padding: 0.8rem; border-bottom: 1px solid var(--line); }
+  .search-header svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: var(--phosphor); stroke-width: 1.8; }
+  .search-header input { min-width: 0; border: 0; background: transparent; color: #fff; font: 500 1rem var(--mono); outline: 0; }
+  .search-header input::placeholder { color: #638078; }
+  .key-button { min-height: 1.7rem; padding: 0.35rem 0.45rem; border-color: var(--line); background: #10201f; color: var(--muted); font-size: 0.52rem; }
+  .search-scope { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line); }
+  .scope-switch { display: flex; gap: 1px; padding: 1px; background: var(--line); }
+  .scope-switch[hidden] { display: none; }
+  .scope-button { padding: 0.35rem 0.6rem; border: 0; background: #10201f; color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+  .scope-button:hover { color: #cfe6df; }
+  .scope-button[aria-pressed="true"] { background: rgba(134,250,221,.14); color: var(--phosphor); }
+  /* Auto start-margin keeps the count against the trailing edge with or without the toggle. */
+  .search-count { margin: 0 0 0 auto; color: var(--muted); font: 0.55rem var(--mono); text-align: end; text-transform: uppercase; }
+  .search-results { max-height: min(26rem, 60vh); overflow: auto; margin: 0; padding: 0.4rem; list-style: none; }
+  .search-results button { width: 100%; display: grid; grid-template-columns: 2.1rem 1fr auto; align-items: center; gap: 0.75rem; padding: 0.7rem; background: transparent; text-align: start; cursor: pointer; }
+  .search-results button:hover, .search-results button:focus-visible { background: rgba(134,250,221,.08); }
+  /* The active row is keyboard state, not focus: focus stays in the input while arrows move it. */
+  .search-results button.is-active { background: rgba(134,250,221,.12); box-shadow: inset 2px 0 0 var(--phosphor); }
+  .search-results button.is-active kbd { border-color: var(--phosphor); color: var(--phosphor); }
+  .result-glyph { width: 1.75rem; height: 1.75rem; }
+  .search-results span { display: grid; gap: 0.15rem; }
+  .search-results strong { color: #eaf6f2; font: 600 0.72rem var(--mono); }
+  .search-results small { color: var(--muted); font: 0.55rem var(--mono); text-transform: uppercase; }
+  /* The return glyph needs room to read as an arrow, so it opts out of the small kbd type scale. */
+  .search-results kbd { min-width: 1.9rem; align-items: center; padding: 0.3rem 0.45rem; font-size: 0.85rem; line-height: 1; }
+  .search-empty { padding: 3rem; color: var(--muted); font: 650 0.64rem var(--mono); text-align: center; }
+
+  /**
+   * The manual reads as terminal output because that is the only voice this interface
+   * has: a prompt, the command that was run, and the machine answering under it. The
+   * screen is a shade darker than the frame around it, the way a terminal window sits
+   * inside its own chrome.
+   */
+  .help-dialog { width: min(42rem, calc(100vw - 2rem)); margin-top: 8vh; padding: 0; border: 1px solid var(--line-strong); background: var(--panel-solid); box-shadow: 0 2rem 5rem rgba(0,0,0,.7), 0 0 50px rgba(134,250,221,.08); }
+  .help-dialog[open] { animation: viewer-in 180ms steps(4, end); }
+  .help-dialog form { margin: 0; }
+  .help-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem; border-bottom: 1px solid var(--line); }
+  .help-screen { max-height: min(32rem, 66vh); overflow: auto; padding: 1rem 1.1rem 1.2rem; background: #071110; }
+  .help-screen:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: -4px; }
+  .help-command { margin: 0; color: var(--phosphor-bright); font: 650 0.68rem var(--mono); }
+  .help-command span { margin-right: 0.5em; color: #4d8477; }
+  /* The caret parks on a bare prompt at the foot, the way a shell leaves a screen it
+     has finished printing. Its blink is stopped by the reduced-motion rule, which
+     leaves the block solid — still a prompt, just not a flashing one. */
+  .help-end { margin-top: 1.4rem; }
+  .help-end::after { display: inline-block; width: .55em; height: .95em; content: ""; background: var(--phosphor); vertical-align: -.14em; animation: caret-blink 1.1s steps(1) infinite; }
+  .help-block { margin-top: 1.35rem; }
+  .help-block h3 { margin: 0 0 0.55rem; color: var(--phosphor); font: 700 0.58rem var(--mono); letter-spacing: .18em; text-transform: uppercase; }
+  .help-block h3::before { color: #3f6f64; content: "── "; }
+  .help-block dl { margin: 0; }
+  .help-block dl > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.75rem; padding: 0.3rem 0; }
+  /* Keys wrap as a group rather than stretching the column: a binding spelled out of
+     four of them is still one term, and the description stays on its own axis. Aligned
+     to the start, or a key opposite a description long enough to wrap is stretched to
+     the height of both its lines and stops reading as a key. */
+  .help-block dt { display: flex; flex-wrap: wrap; align-items: start; gap: 0.25rem; }
+  .help-block dd { margin: 0; color: #b8ffe9; font: 500 0.66rem/1.5 var(--mono); }
+
+  /* The browser's own dialog cap sits a little inside these, and would quietly shave a
+     window that asks to be as tall as it is allowed; these mirror VIEWPORT_INSET in
+     viewer.ts, which is what actually holds the window off the viewport edge. */
+  .file-viewer { width: min(65rem, calc(100vw - 2rem)); height: min(44rem, calc(100dvh - 2rem)); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 0; border: 1px solid #74988e; background: #758b83; color: #09100f; box-shadow: 0 2rem 8rem #000; }
+  /* Overrides any width/height the grow box has written inline, so zooming always fills. */
+  .file-viewer.is-maximized { width: calc(100vw - 1rem) !important; height: calc(100dvh - 1rem) !important; }
+  .file-viewer[open] { animation: viewer-in 180ms steps(4, end); }
+  .viewer-window { position: relative; height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 3px double #263d38; background: #b6c4be; }
+  /* The pinstripes are the window-chrome texture; each control sits on a solid plate
+     so no stripe ever runs through a button or the file name. Equal flexible columns
+     either side centre the name in the bar itself, not in the space the controls leave. */
+  .viewer-titlebar { min-height: 3.4rem; display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem; border-bottom: 2px solid #1b302b; background: repeating-linear-gradient(#c3cfca 0 1px, #a2b4ac 1px 3px); cursor: grab; touch-action: none; user-select: none; }
+  .viewer-titlebar.is-dragging { cursor: grabbing; }
+  .file-viewer.is-maximized .viewer-titlebar { cursor: default; }
+  .viewer-titlebar > * { background: #b6c4be; }
+  /* The lights are the window controls. The button is a comfortable hit target;
+     the dot inside it stays the small period-correct square. */
+  .traffic-lights { justify-self: start; display: flex; gap: 0.05rem; padding: 0.2rem; }
+  .light { width: 1.45rem; height: 1.45rem; display: grid; place-items: center; padding: 0; background: none; cursor: pointer; }
+  .light i { width: 0.72rem; height: 0.72rem; display: grid; place-items: center; border: 1px solid #2b443e; color: transparent; font: 700 0.52rem/1 var(--mono); font-style: normal; }
+  .light-close i { background: #ff5d7f; }
+  .light-collapse i { background: #ffd45d; }
+  .light-zoom i { background: #68d9b4; }
+  .traffic-lights:hover i, .light:focus-visible i { color: rgba(9, 22, 19, .72); }
+  .light:active i { filter: brightness(.82); }
+  /* Shrink-to-fit and centred, so the stripes stay visible either side of the name plate. */
+  .viewer-title-wrap { justify-self: center; max-width: 100%; min-width: 0; display: grid; justify-items: center; gap: 0.2rem; padding: 0.2rem 0.75rem; }
+  .viewer-title-wrap span { color: #38544d; font: 700 0.48rem/1 var(--mono); letter-spacing: .12em; }
+  .viewer-title-wrap h2 { max-width: 100%; overflow: hidden; margin: 0; font: 700 0.82rem/1.25 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  /* Classic grow box: it overlaps the frame in the bottom-right corner. */
+  .viewer-grow { position: absolute; z-index: 1; right: 0; bottom: 0; width: 1.15rem; height: 1.15rem; padding: 0; border: 0; background: repeating-linear-gradient(-45deg, #4d6660 0 1px, transparent 1px 3px) #b6c4be; cursor: nwse-resize; touch-action: none; }
+  .file-viewer.is-maximized .viewer-grow { display: none; }
+  /* Window shade: the frame rolls up to the title bar. Declared after the zoom rule so a
+     collapsed window stays rolled up even while it is maximised, and sized with fit-content
+     rather than auto because the UA centres the dialog with inset 0 plus margin auto, which
+     would stretch an auto height back to the full viewport. */
+  .file-viewer.is-collapsed { height: fit-content !important; }
+  .file-viewer.is-collapsed :is(.viewer-toolbar, .viewer-content, .viewer-footer, .viewer-grow) { display: none; }
+  .file-viewer.is-collapsed .viewer-titlebar { border-bottom: 0; }
+  .viewer-toolbar { min-height: 2.3rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.35rem 0.55rem; border-bottom: 1px solid #5e756e; background: #a4b5ae; font: 650 0.55rem var(--mono); }
+  .viewer-toolbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewer-toolbar > div { display: flex; align-items: center; gap: 0.75rem; white-space: nowrap; }
+  .tool-toggle { min-height: 1.55rem; padding: 0.25rem 0.5rem; border: 1px solid #536d65; background: #bed0c8; color: #1b3932; font-size: 0.5rem; box-shadow: inset 1px 1px #eef5f2, inset -1px -1px #6d827b; }
+  .tool-toggle[aria-pressed="true"] { background: #2e5148; color: #b8ffec; box-shadow: inset 1px 1px #142b25; }
+  .viewer-content { position: relative; min-height: 0; overflow: auto; margin: 0.5rem; border: 2px inset #d8e2de; background: #0c1715; color: #b8ffec; }
+  /* The right padding clears the grow box that overlaps this corner. */
+  .viewer-footer { min-height: 1.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0 1.4rem 0 0.55rem; border-top: 1px solid #536c65; color: #263e38; font: 700 0.48rem var(--mono); }
+  .viewer-footer span:first-child { display: flex; align-items: center; gap: 0.4rem; }
+  .viewer-led { width: 0.4rem; height: 0.4rem; background: #16b688; box-shadow: 0 0 4px #16b688; }
+  /* An explicit row for the picture and one for the caption: the picture's row is the
+     only flexible one, which gives it a definite height to scale itself against and
+     keeps the frame around it even top and bottom. */
+  .image-view { min-height: 100%; max-height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0.7rem; margin: 0; padding: 1rem; background-color: #14221f; background-image: linear-gradient(45deg, #0d1917 25%, transparent 25%), linear-gradient(-45deg, #0d1917 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #0d1917 75%), linear-gradient(-45deg, transparent 75%, #0d1917 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
+  /* Capped by the stage, so a tall photo shrinks to fit rather than running past the
+     frame and taking the caption with it. */
+  .image-view .image-surface { max-width: 100%; max-height: 100%; min-height: 0; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
+  .image-view figcaption { justify-self: center; padding: 0.25rem 0.55rem; background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
+  /* A pane that scrolls sideways is wider than its scrollport, and a box sized to the
+     scrollport paints only the first screenful — the rest scrolls onto bare frame. These
+     views size to their own content instead, so their background travels with the text. */
+  .text-document { min-height: 100%; width: max-content; min-width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); background: #081210; }
+  .line-numbers { margin: 0; padding: 1.25rem 0.75rem 1.25rem 2.6rem; border-right: 1px solid rgba(117,255,216,.14); background: #0c1916; color: #416e62; font: 0.7rem/1.65 var(--mono); text-align: right; user-select: none; }
+  .text-document pre { min-width: max-content; margin: 0; padding: 1.25rem; color: #b8ffe9; font: 0.72rem/1.65 var(--mono); tab-size: 2; white-space: pre-wrap; text-shadow: 0 0 8px rgba(107,255,218,.16); }
+  .text-editor { height: 100%; min-height: 18rem; display: grid; grid-template-columns: auto minmax(0, 1fr); overflow: hidden; background: #081210; }
+  .text-editor .line-numbers { height: 100%; overflow: hidden; }
+  .text-editor-input { width: 100%; height: 100%; min-width: 0; resize: none; overflow: auto; padding: 1.25rem; border: 0; outline: 0; background: #081210; color: #b8ffe9; caret-color: var(--phosphor-bright); font: 0.72rem/1.65 var(--mono); tab-size: 2; text-shadow: 0 0 8px rgba(107,255,218,.16); }
+  .text-editor-input:focus-visible { box-shadow: inset 0 0 0 1px rgba(134,250,221,.28); }
+  .viewer-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 1rem; color: #8eeed3; font: 700 0.65rem var(--mono); letter-spacing: .12em; }
+  .viewer-loading i { width: 4rem; height: 0.5rem; border: 1px solid #47786b; background: repeating-linear-gradient(90deg, var(--phosphor) 0 .45rem, transparent .45rem .7rem); animation: load-scan .8s steps(6) infinite; }
+  .access-denied { min-height: 100%; display: grid; place-content: center; justify-items: center; padding: 3rem; background: radial-gradient(circle, rgba(255,78,115,.12), transparent 42%), #10090b; color: #e8cbd1; text-align: center; }
+  .denied-glyph { position: relative; width: 5.2rem; height: 5.2rem; margin-bottom: 1.5rem; border: 2px solid var(--signal); transform: rotate(45deg); box-shadow: 0 0 28px rgba(255,91,130,.22), inset 0 0 28px rgba(255,91,130,.08); }
+  .denied-glyph i::before, .denied-glyph i::after { position: absolute; top: 50%; left: 18%; width: 64%; height: 2px; content: ""; background: var(--signal); }
+  .denied-glyph i::before { transform: rotate(0deg); }
+  .denied-glyph i::after { transform: rotate(90deg); }
+  .denied-code { margin: 0; color: var(--signal); font: 700 0.6rem var(--mono); letter-spacing: .15em; }
+  .access-denied h3 { margin: 0.65rem 0 1rem; color: #fff1f4; font: 800 clamp(2rem, 6vw, 4rem)/1 var(--mono); letter-spacing: -.08em; text-shadow: 4px 0 rgba(73,255,213,.18), -4px 0 rgba(255,91,130,.22); }
+  .access-denied > p:not(.denied-code) { max-width: 36rem; margin: 0; color: #b999a1; font: 0.72rem/1.65 var(--mono); }
+  .access-denied dl { width: min(30rem, 100%); margin: 2rem 0 0; border-top: 1px solid rgba(255,91,130,.28); }
+  .access-denied dl > div { display: flex; justify-content: space-between; gap: 1rem; padding: 0.45rem 0; border-bottom: 1px solid rgba(255,91,130,.15); }
+  .access-denied dt, .access-denied dd { margin: 0; font: 600 0.55rem var(--mono); }
+  .access-denied dt { color: #88636c; }
+  .access-denied dd { color: var(--signal); }
+  .media-deck { height: 100%; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0.9rem; padding: 0.9rem; background: #05090c; }
+  .media-deck:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: -4px; }
+  .media-deck.is-video { grid-template-rows: minmax(0, 1fr) 4.5rem auto; }
+  .media-deck.is-dead .visualizer-stage { border-color: var(--signal); }
+  .media-deck audio { display: none; }
+  .media-deck video { width: 100%; height: 100%; min-height: 0; object-fit: contain; background: #000; }
+  .visualizer-stage { position: relative; min-height: 0; overflow: hidden; border: 1px solid #23413c; background: #05070c; }
+  .visualizer-stage canvas { display: block; width: 100%; height: 100%; }
+  .visualizer-fallback { display: grid; height: 100%; place-content: center; margin: 0; color: #4c8d7d; font: 600 0.55rem var(--mono); letter-spacing: .1em; }
+  .media-credit { margin: 0; color: var(--phosphor); font: 600 0.55rem var(--mono); letter-spacing: .06em; text-align: center; }
+  .media-credit a { color: inherit; text-decoration-color: rgba(134,250,221,.4); text-underline-offset: 0.25em; }
+  .media-credit a:hover { text-decoration-color: currentColor; }
+
+  .transport { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; border: 1px solid #23413c; background: linear-gradient(#0c1a18, #081311); }
+  .transport-key { position: relative; width: 2.1rem; height: 1.9rem; display: grid; place-items: center; border: 1px solid #37605a; border-radius: 0.15rem; background: linear-gradient(#132523, #0d1b19); cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+  .transport-key:hover { border-color: var(--phosphor); background: #17322e; }
+  .transport-key:active { transform: translateY(1px); }
+  .transport-key i { display: block; background: var(--phosphor); box-shadow: 0 0 8px rgba(134,250,221,.5); }
+  /* Play: a triangle drawn with a clip so the button stays one element. Nudged right
+     because a triangle centred on its bounding box reads as sitting too far left. */
+  .transport-key.is-play i { width: 0.72rem; height: 0.8rem; clip-path: polygon(0 0, 100% 50%, 0 100%); transform: translateX(0.06rem); }
+  /* Pause: one bar plus a hard-edged shadow for the second. The shadow adds no layout,
+     so the box shifts left by half the offset to centre the pair. */
+  .transport-key.is-play.is-playing i { width: 0.24rem; height: 0.8rem; clip-path: none; transform: translateX(-0.17rem); box-shadow: 0.34rem 0 0 var(--phosphor), 0 0 8px rgba(134,250,221,.5); }
+  .transport-key.is-stop i { width: 0.72rem; height: 0.72rem; }
+  .transport-key.is-mute i { width: 0.7rem; height: 0.7rem; clip-path: polygon(0 30%, 38% 30%, 74% 0, 74% 100%, 38% 70%, 0 70%); }
+  .transport-key.is-mute.is-muted i { background: #6b7f7b; box-shadow: none; }
+  .transport-time { min-width: 3.1rem; color: var(--phosphor); font: 600 0.6rem var(--mono); font-variant-numeric: tabular-nums; text-align: center; }
+
+  .transport input[type="range"] { --progress: 0%; height: 1.1rem; flex: 1; appearance: none; background: transparent; cursor: pointer; }
+  .transport input.transport-volume { flex: 0 0 4.5rem; }
+  .transport input[type="range"]::-webkit-slider-runnable-track { height: 0.32rem; border: 1px solid #2c4f49; background: linear-gradient(90deg, var(--phosphor) var(--progress), #0c1a18 var(--progress)); box-shadow: 0 0 10px rgba(134,250,221,.18); }
+  .transport input[type="range"]::-moz-range-track { height: 0.32rem; border: 1px solid #2c4f49; background: linear-gradient(90deg, var(--phosphor) var(--progress), #0c1a18 var(--progress)); }
+  .transport input[type="range"]::-webkit-slider-thumb { width: 0.5rem; height: 1rem; margin-top: -0.38rem; appearance: none; border: 0; border-radius: 0.06rem; background: var(--phosphor-bright); box-shadow: 0 0 10px rgba(217,255,239,.7); }
+  .transport input[type="range"]::-moz-range-thumb { width: 0.5rem; height: 1rem; border: 0; border-radius: 0.06rem; background: var(--phosphor-bright); box-shadow: 0 0 10px rgba(217,255,239,.7); }
+  .transport input[type="range"]:focus-visible { outline: 2px solid var(--phosphor-bright); outline-offset: 3px; }
+
+  .viewer-switch { display: flex; }
+  .viewer-switch .tool-toggle { border-radius: 0; }
+  .viewer-switch .tool-toggle + .tool-toggle { border-left-width: 0; }
+  .viewer-switch .tool-toggle:first-child { border-radius: 0.15rem 0 0 0.15rem; }
+  .viewer-switch .tool-toggle:last-child { border-radius: 0 0.15rem 0.15rem 0; }
+  /* The reader fills the pane exactly: a minimum height would only hand it a scrollbar
+     around a document that already scrolls itself, and an inline frame left on a text
+     baseline leaves a few scrolling pixels under it. */
+  .pdf-view { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+  .viewer-tools { display: flex; align-items: center; gap: 0.4rem; }
+  .media-display.is-slim { min-width: 0; padding: 0.7rem; }
+  .media-display.is-slim .equalizer { height: 2.4rem; }
+  .media-display.is-dead { border-color: var(--signal); box-shadow: inset 0 0 3rem rgba(255,91,130,.08); }
+  .media-display.is-dead .equalizer i { background: #4a2732; box-shadow: none; }
+
+  /* The source image stays laid out under the canvas: a detached <img> stops animating,
+     and the pixel filter samples its live frame every tick. Explicit tracks, not the
+     implicit content-sized ones: a percentage cap on a picture inside an auto row is
+     circular, so the browser drops it and the image overflows instead. */
+  .image-stage { position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; min-height: 0; max-width: 100%; max-height: 100%; }
+  .image-stage > * { grid-area: 1 / 1; }
+  .image-stage .image-source { max-width: 100%; max-height: 100%; border: 1px solid #6f8a82; box-shadow: 0 1rem 2rem rgba(0,0,0,.4); }
+  .image-stage.is-filtered .image-source { opacity: 0; pointer-events: none; }
+  .image-stage:not(.is-filtered) canvas { display: none; }
+  .image-view .image-surface { image-rendering: pixelated; filter: contrast(1.12) saturate(.82); }
+
+  .sheet-view { min-height: 100%; padding: 1rem; background: #081210; }
+  .sheet { width: 100%; border-collapse: collapse; font: 0.62rem/1.5 var(--mono); }
+  .sheet :is(th, td) { max-width: 22rem; overflow: hidden; padding: 0.3rem 0.6rem; border: 1px solid rgba(117,255,216,.14); text-overflow: ellipsis; white-space: nowrap; }
+  .sheet thead th { position: sticky; top: -1rem; background: #123028; color: var(--phosphor-bright); font-weight: 700; letter-spacing: .08em; text-align: left; }
+  .sheet tbody td { color: #b8ffe9; }
+  .sheet tbody tr:nth-child(even) { background: rgba(117,255,216,.035); }
+  .sheet :is(.sheet-corner, .sheet-index) { background: #0d211d; color: #4d8477; font-weight: 600; text-align: right; }
+  .sheet td.is-numeric { color: var(--amber); text-align: right; font-variant-numeric: tabular-nums; }
+  .sheet-note { margin: 0.8rem 0 0; color: #4d8477; font: 600 0.55rem var(--mono); }
+
+  .json-view { min-height: 100%; width: max-content; min-width: 100%; padding: 1.1rem 1.3rem; background: #081210; color: #b8ffe9; font: 0.72rem/1.7 var(--mono); }
+  .json-branch > summary { display: flex; gap: 0.5rem; cursor: pointer; list-style: none; }
+  .json-branch > summary::before { color: #4d8477; content: "▸"; }
+  .json-branch[open] > summary::before { content: "▾"; }
+  .json-branch > summary:hover { background: rgba(117,255,216,.07); }
+  .json-children { margin-left: 0.55rem; padding-left: 0.9rem; border-left: 1px solid rgba(117,255,216,.16); }
+  .json-row { display: flex; gap: 0.5rem; padding-left: 0.85rem; }
+  .json-key { color: #6fd8bd; }
+  .json-key::after { color: #3f6f64; content: ":"; }
+  .json-brace { color: #4d8477; }
+  .json-value.is-string { color: var(--amber); }
+  .json-value.is-number { color: #8dbdf5; }
+  .json-value.is-boolean { color: var(--violet); }
+  .json-value.is-null { color: #7d8f8b; font-style: italic; }
+
+  .manifest-view { min-height: 100%; padding: 1rem; background: #081210; }
+  .manifest { width: 100%; border-collapse: collapse; font: 0.62rem/1.5 var(--mono); }
+  .manifest :is(th, td) { padding: 0.32rem 0.6rem; border-bottom: 1px solid rgba(117,255,216,.12); text-align: left; white-space: nowrap; }
+  .manifest thead th { position: sticky; top: -1rem; background: #123028; color: var(--phosphor-bright); letter-spacing: .08em; }
+  .manifest tbody td { color: #b8ffe9; }
+  .manifest td.is-numeric { color: var(--amber); text-align: right; font-variant-numeric: tabular-nums; }
+  .manifest tr.is-directory td { color: #4d8477; }
+  .manifest-name { max-width: 30rem; overflow: hidden; text-overflow: ellipsis; }
+  .manifest-lock { margin-left: 0.5rem; padding: 0.05rem 0.3rem; border: 1px solid var(--signal); color: var(--signal); font-size: 0.5rem; font-style: normal; }
+  .manifest-comment { margin: 0 0 0.9rem; padding: 0.5rem 0.7rem; border-left: 2px solid var(--phosphor); background: rgba(117,255,216,.06); color: var(--phosphor); font: 0.62rem var(--mono); }
+  .manifest-note { margin: 1rem 0 0; color: #4d8477; font: 600 0.55rem var(--mono); }
+
+  .specimen { min-height: 100%; padding: 2rem; background: #081210; color: #d9ffef; font-family: var(--specimen), var(--sans); }
+  .specimen.is-system { font-family: var(--sans); }
+  .specimen-name { margin: 0 0 1.6rem; padding-bottom: 0.8rem; border-bottom: 1px solid rgba(117,255,216,.2); color: var(--phosphor); font: 700 0.6rem var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .specimen-line { position: relative; margin: 0 0 1.1rem; overflow: hidden; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+  .specimen-line small { margin-left: 0.8rem; color: #3f6f64; font: 600 0.5rem var(--mono); vertical-align: middle; }
+  .specimen-grid { margin-top: 1.8rem; padding-top: 1.4rem; border-top: 1px solid rgba(117,255,216,.2); }
+  .specimen-grid p { margin: 0 0 0.6rem; font-size: 1.3rem; line-height: 1.5; word-break: break-all; }
+
+  .model-view { position: relative; height: 100%; min-height: 26rem; display: grid; grid-template-rows: minmax(0, 1fr) auto; margin: 0; }
+  .model-stage { position: relative; min-height: 0; overflow: hidden; background: #081210; touch-action: none; cursor: grab; }
+  .model-stage:active { cursor: grabbing; }
+  .model-stage canvas { display: block; width: 100%; height: 100%; }
+  .model-readout { margin: 0; padding: 0.4rem 0.7rem; border-top: 1px solid rgba(117,255,216,.16); background: #0b1714; color: #78b3a4; font: 600 0.52rem var(--mono); }
+
+  .hex-view { min-height: 100%; width: max-content; min-width: 100%; padding: 1rem; background: #081210; }
+  .hex-table { margin: 0; font: 0.68rem/1.55 var(--mono); }
+  .hex-row { display: flex; gap: 1.4rem; }
+  .hex-row:hover { background: rgba(117,255,216,.07); }
+  .hex-offset { color: #3f6f64; }
+  .hex-bytes { color: #b8ffe9; white-space: pre; }
+  .hex-ascii { color: var(--amber); white-space: pre; }
+  .access-denied .tool-toggle { margin-top: 2rem; }
+
+  @keyframes boot-failsafe { to { opacity: 1; } }
+  @keyframes title-in { from { opacity: 0; transform: translateY(0.6rem); } }
+  @keyframes crumb-in { from { opacity: 0; transform: translateX(-0.45rem); } }
+  @keyframes led-pulse { 50% { opacity: .35; } }
+  @keyframes load-scan { to { background-position: .7rem 0; } }
+  /* 300%: a segment a third of the track wide clears the far edge at three widths out. */
+  @keyframes load-sweep { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+  @keyframes viewer-in { from { opacity: 0; transform: scale(.97) translateY(.7rem); } }
+  /* The panel resolves rather than merely appears: out of focus and overbright first. */
+  @keyframes welcome-resolve {
+    from { filter: blur(10px) brightness(1.7); }
+    to { filter: blur(0) brightness(1); }
+  }
+  @keyframes welcome-sweep { from { opacity: 0; transform: translateY(-58%); } 30% { opacity: 1; } to { opacity: 0; transform: translateY(58%); } }
+  @keyframes halo-in { from { opacity: 0; transform: scale(.55); } }
+  @keyframes halo-breathe { 50% { opacity: .72; transform: scale(1.05); } }
+  @keyframes floor-in { from { opacity: 0; transform: scaleY(.55); } }
+  @keyframes column-rise { from { opacity: 0; transform: translateY(28px); } }
+  /* Both ends are stated: clip-path has no interpolable value to fall back on. */
+  @keyframes type-in { from { clip-path: inset(-.4em 100% -.4em -.1em); } to { clip-path: inset(-.4em -.15em -.4em -.1em); } }
+  @keyframes caret-blink { 50% { opacity: 0; } }
+  @keyframes line-in {
+    from { opacity: 0; transform: translateY(.4em); clip-path: inset(-.25em -.12em 100% -.06em); }
+    to { opacity: 1; transform: none; clip-path: inset(-.25em -.12em -.25em -.06em); }
+  }
+  @keyframes copy-rise { from { opacity: 0; transform: translateY(.7rem); } }
+}
+
+@layer utilities {
+  .visually-hidden:where(:not(:focus-within, :active)) { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip-path: inset(50%) !important; margin: -1px !important; padding: 0 !important; border: 0 !important; white-space: nowrap !important; }
+}
+
+@media (max-width: 900px) {
+  .topbar { grid-template-columns: auto 1fr; gap: 0.7rem; }
+  .breadcrumbs { grid-row: 2; grid-column: 1 / -1; justify-content: start; }
+  .top-actions { justify-self: end; }
+  .top-actions .button-secondary { display: none; }
+  .scene-title { top: 7.5rem; }
+  .details-panel { top: auto; bottom: 4.1rem; }
+  .legend { display: none; }
+  .controls { left: auto; right: 1rem; transform: none; }
+  /* Boost is the one of the three worth losing first: it modifies a binding still on
+     screen rather than naming one of its own. The manual button is never dropped. */
+  .controls p:nth-of-type(n+3) { display: none; }
+}
+
+@media (max-width: 600px) {
+  .topbar { padding: 0.6rem; }
+  .brand small { display: none; }
+  /**
+   * The mark is the tallest thing in the bar and sets the row's height on its own, which
+   * on a phone reads as a logo the buttons are hanging off. `zoom` rather than a smaller
+   * width and height: the three shards are inset and offset in absolute rem, so resizing
+   * the box alone would thin them out and slide the stack off its corner. This scales the
+   * layout box and everything drawn in it by the same factor, so the mark keeps its shape
+   * and the bar's height comes down with it.
+   */
+  .brand-mark { zoom: 0.84; }
+  /**
+   * The shards are absolutely positioned, so they paint well outside the mark's own box:
+   * scaling the box alone left a silhouette half again as tall as it is wide, hanging
+   * below the buttons it was meant to line up with and nearly into the breadcrumbs. The
+   * skew and the stack offsets set the height it overshoots by, and neither can come down
+   * without changing the mark's character, so the parallelograms are shortened instead —
+   * the one dimension the glyph can give up and still read as plates seen side on.
+   */
+  .brand-mark i { inset: 0.4rem 0.55rem; }
+  /* Search earns its place back here: it is the quickest way through a deep tree, and it
+     is the one thing a small screen makes harder to do by flying. The demo button has
+     already gone by this width, so it costs the row nothing. */
+  .top-actions .icon-button { width: 2.1rem; min-height: 2.1rem; }
+  .button { min-height: 2.1rem; padding: 0.45rem 0.6rem; font-size: 0.58rem; }
+  .scene-title { top: 7.8rem; width: calc(100vw - 2rem); }
+  .scene-title h1 { font-size: 1.45rem; }
+  /* Clears the strip below it. The panel is the taller box and the one that can be
+     dismissed by selecting nothing, so it gives way rather than the only control a
+     finger has — which sits under it in the stacking order and would lose the tap. */
+  .details-panel { left: 0.6rem; bottom: 3.6rem; width: calc(100vw - 1.2rem); }
+  .details-heading { grid-template-columns: 2.6rem 1fr; padding: 0.7rem; }
+  .file-glyph { width: 2.2rem; height: 2.2rem; }
+  .details-panel dl { padding-inline: .7rem; }
+  .enter-button { width: calc(100% - 1.4rem); margin: 0.25rem 0.7rem 0.7rem; }
+  .status, .reticle { display: none; }
+  /* A phone has no keys to press and no reticle to aim, so the written bindings go and
+     the button stays: it is the only route to the gestures, which are all a finger has. */
+  .controls p { display: none; }
+  .help-dialog { margin-top: 4vh; }
+  /* Gestures first at the width where they are the only bindings that apply; they would
+     otherwise sit three sections down, behind a keyboard and a mouse nobody here has. */
+  .help-screen { max-height: 74vh; display: flex; flex-direction: column; }
+  .help-screen > .help-command:first-child { order: -2; }
+  .help-block:last-of-type { order: -1; }
+  /* Stacked: two columns inside a phone's width leave the descriptions a word wide. */
+  .help-block dl > div { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; padding: 0.4rem 0; }
+  .welcome-dialog[open] { display: block; }
+  .welcome-visual { min-height: 11rem; border-right: 0; border-bottom: 1px solid var(--line); }
+  .welcome-copy { padding: 1.5rem; }
+  .welcome-copy h2 { font-size: 2.1rem; }
+  .welcome-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .welcome-actions .button { width: 100%; }
+  /* Dynamic units, not 100vh: a phone browser's own bars are inside the large viewport,
+     so a window sized against that hangs off both ends of the screen. */
+  .file-viewer { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; }
+  .viewer-toolbar { align-items: start; flex-direction: column; gap: .4rem; }
+  .viewer-toolbar > div { width: 100%; justify-content: space-between; }
+  .access-denied { padding: 1.5rem; }
+  .access-denied h3 { font-size: 2rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  /* Its sweep is stopped dead by the rule above, which would leave the segment parked
+     off the end of the track. A still line says the same thing without travelling. */
+  .loading-bar i { width: 100%; background: var(--phosphor); opacity: .55; transform: none; }
+}
+
+/* The native window never switches the front door to the narrow, stacked browser
+   treatment. Tauri has an 800px minimum window, so the compact two-column set piece
+   remains usable and visually consistent at every supported desktop size. WKWebView
+   otherwise stretches an auto-height grid dialog between its centred block insets. */
+:root[data-platform="desktop"] .welcome-dialog { height: min(22rem, calc(100dvh - 2rem)); max-height: calc(100dvh - 2rem); grid-template-rows: minmax(0, 1fr); }
+:root[data-platform="desktop"] .welcome-dialog[open] { display: grid; }
+:root[data-platform="desktop"] .welcome-visual { height: 100%; min-height: 0; border-right: 1px solid var(--line); border-bottom: 0; }
+:root[data-platform="desktop"] .welcome-copy { padding: clamp(1.5rem, 3vw, 2.5rem); }
+:root[data-platform="desktop"] .welcome-actions { width: auto; align-items: center; flex-direction: row; }
+:root[data-platform="desktop"] .welcome-actions .button { width: auto; }

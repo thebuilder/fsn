@@ -1,0 +1,22 @@
+{
+  "name": "@fsn/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./filesystem": "./src/filesystem.ts",
+    "./parsers/binary": "./src/parsers/binary.ts",
+    "./parsers/delimited": "./src/parsers/delimited.ts",
+    "./parsers/zip": "./src/parsers/zip.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

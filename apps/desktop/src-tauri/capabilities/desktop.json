@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Local filesystem access explicitly selected by the user.",
+  "windows": ["main"],
+  "platforms": ["macOS", "windows", "linux"],
+  "permissions": [
+    "core:path:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-destroy",
+    "allow-pick-root",
+    "allow-clear-active-root",
+    "allow-read-dir-native",
+    "allow-read-file-native",
+    "allow-read-text-native",
+    "allow-write-text-atomic",
+    "allow-macos-quit-bridge-ready",
+    "allow-respond-to-macos-quit",
+    "allow-open-native"
+  ]
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-respond-to-macos-quit"
+description = "Enables the respond_to_macos_quit command without any pre-configured scope."
+commands.allow = ["respond_to_macos_quit"]
+
+[[permission]]
+identifier = "deny-respond-to-macos-quit"
+description = "Denies the respond_to_macos_quit command without any pre-configured scope."
+commands.deny = ["respond_to_macos_quit"]

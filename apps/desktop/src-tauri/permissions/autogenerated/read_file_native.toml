@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-file-native"
+description = "Enables the read_file_native command without any pre-configured scope."
+commands.allow = ["read_file_native"]
+
+[[permission]]
+identifier = "deny-read-file-native"
+description = "Denies the read_file_native command without any pre-configured scope."
+commands.deny = ["read_file_native"]
