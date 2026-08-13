@@ -591,6 +591,11 @@ export class WorldScene {
   private pendingSince = 0;
   private hoverTarget: Placement | null = null;
   private hoverShown: Placement | null = null;
+  /** Latest pointermove position, resolved once per frame instead of once per event. */
+  private pointerClient: { x: number; y: number } | null = null;
+  private pointerDirty = false;
+  /** Only changes when layout does; the ResizeObserver clears it when that happens. */
+  private canvasRect: DOMRect | null = null;
   private hoverStrength = 0;
   private aimBoxOpacity = 0;
   private readonly scratchColor = new THREE.Color();
@@ -1399,7 +1404,9 @@ export class WorldScene {
   }
 
   private hitTest(clientX: number, clientY: number): Placement | null {
-    const rect = this.canvas.getBoundingClientRect();
+    // The rect only changes when layout does, and the ResizeObserver already fires then.
+    this.canvasRect ??= this.canvas.getBoundingClientRect();
+    const rect = this.canvasRect;
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
     return this.hitAtNdc(x, y);
@@ -1488,15 +1495,30 @@ export class WorldScene {
     this.callbacks.onSelect(placement.node);
   }
 
+  // Pointermove can arrive at up to ~120/s, well past the render rate; recording the
+  // latest position and resolving it once per frame (see `resolveHover`) makes hover
+  // cost one raycast per frame, like aim already does.
   private onPointerMove = (event: PointerEvent): void => {
-    const hit = this.hitTest(event.clientX, event.clientY);
+    this.pointerClient = { x: event.clientX, y: event.clientY };
+    this.pointerDirty = true;
+  };
+
+  /**
+   * Resolves the latest recorded pointermove into a hover state. Split out of
+   * `onPointerMove` so the per-event handler stays a cheap store, with the actual
+   * raycast paid for once per frame in `animate` instead of once per event.
+   */
+  private resolveHover(): void {
+    if (!this.pointerClient) return;
+    const { x, y } = this.pointerClient;
+    const hit = this.hitTest(x, y);
     if (hit?.node.id !== this.hovered?.id) {
       this.hovered = hit?.node ?? null;
       this.canvas.style.cursor = hit ? "crosshair" : "grab";
     }
     this.hoverTarget = hit;
-    this.callbacks.onHover(hit?.node ?? null, event.clientX, event.clientY);
-  };
+    this.callbacks.onHover(hit?.node ?? null, x, y);
+  }
 
   /**
    * Ends an establishing shot the moment the view is touched. Flights that did not offer
@@ -1534,6 +1556,10 @@ export class WorldScene {
     if (event.pointerType !== "mouse" && this.hoverTarget) {
       this.hovered = null;
       this.hoverTarget = null;
+      // Also drop the pending pointermove, or the next frame's resolveHover would
+      // resurrect the hover this finger-lift just cleared.
+      this.pointerClient = null;
+      this.pointerDirty = false;
       this.callbacks.onHover(null, event.clientX, event.clientY);
     }
     if (!candidate || candidate.id !== event.pointerId) return;
@@ -1625,6 +1651,9 @@ export class WorldScene {
   };
 
   private resize = (): void => {
+    // The cached rect in `hitTest` is only valid until layout changes; the
+    // ResizeObserver that calls `resize` is exactly the signal that it has.
+    this.canvasRect = null;
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     this.renderer.setSize(width, height, false);
@@ -1710,6 +1739,13 @@ export class WorldScene {
     if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
+    // Coalesces every pointermove since the last frame into one raycast, the way the
+    // 80 ms aim gate below already coalesces mousemove; the hover cross-fade hides the
+    // at-most-one-frame latency this adds.
+    if (this.pointerDirty && this.pointerClient) {
+      this.pointerDirty = false;
+      this.resolveHover();
+    }
     // After the reveal, so the lift survives the intro's matrix rewrites.
     this.updateHoverHighlight(delta);
     this.updateAimBox(delta);
