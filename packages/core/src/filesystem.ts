@@ -95,6 +95,23 @@ const imageExtensions = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "j
 const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "ogv", "webm"]);
 const documentExtensions = new Set([...tabularTextExtensions, ...textDocumentExtensions, "doc", "docx", "pdf"]);
+
+/**
+ * The single source of truth for extension -> MIME type, so a platform adapter never has to
+ * hand-maintain its own map that can silently drift from the classification sets above (a
+ * `.jfif` file once routed to the image viewer while typed `application/octet-stream`, because
+ * the desktop app's map lacked the entry core already knew about).
+ */
+const extensionMimeTypes = new Map<string, string>([
+  ["aac", "audio/aac"], ["aiff", "audio/aiff"], ["apng", "image/apng"], ["avif", "image/avif"],
+  ["avi", "video/x-msvideo"], ["bmp", "image/bmp"], ["flac", "audio/flac"], ["gif", "image/gif"],
+  ["ico", "image/x-icon"], ["jfif", "image/jpeg"], ["jpeg", "image/jpeg"], ["jpg", "image/jpeg"], ["m4a", "audio/mp4"],
+  ["m4v", "video/mp4"], ["mkv", "video/x-matroska"], ["mov", "video/quicktime"], ["mp3", "audio/mpeg"],
+  ["mp4", "video/mp4"], ["mpeg", "video/mpeg"], ["oga", "audio/ogg"], ["ogg", "audio/ogg"],
+  ["ogv", "video/ogg"], ["opus", "audio/opus"], ["pdf", "application/pdf"], ["png", "image/png"],
+  ["svg", "image/svg+xml"], ["tif", "image/tiff"], ["tiff", "image/tiff"], ["wav", "audio/wav"],
+  ["weba", "audio/webm"], ["webm", "video/webm"], ["webp", "image/webp"],
+]);
 const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "jar", "rar", "tar", "tgz", "zip"]);
 const modelExtensions = new Set(["glb", "gltf", "obj", "ply", "stl"]);
 const fontExtensions = new Set(["otf", "ttf", "woff", "woff2"]);
@@ -120,6 +137,14 @@ export function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
+
+/** The MIME type to hand a `Blob`/`File` constructor for this name, or a safe generic fallback. */
+export function mimeTypeFor(name: string): string {
+  return extensionMimeTypes.get(extensionOf(name)) ?? "application/octet-stream";
+}
+
+/** Exposed only so tests can assert every classified media extension also has a MIME entry; not for feature code. */
+export const mediaExtensionSets = { image: imageExtensions, audio: audioExtensions, video: videoExtensions } as const;
 
 /** Classifies files that carry no usable extension, including scoped dotfiles like `.env.local`. */
 function namedCategory(name: string): FileCategory | undefined {

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   DIRECTORY_PEEK_LIMIT,
   categoryOf,
+  mimeTypeFor,
   sortNodes,
   type DirectoryPeek,
   type FilesystemRoot,
@@ -166,7 +167,7 @@ export async function readDesktopResource(
     : Uint8Array.from(loaded.bytes);
   node.size = payload.byteLength;
   return {
-    blob: new Blob([payload], { type: desktopMimeType(node.name) }),
+    blob: new Blob([payload], { type: mimeTypeFor(node.name) }),
     snapshot: loaded.snapshot ? normalizeSnapshot(loaded.snapshot) : undefined,
   };
 }
@@ -220,20 +221,6 @@ function desktopNativePath(node: FsNode): string {
     throw new Error("This object cannot be opened in a native application.");
   }
   return node.resource.id;
-}
-
-function desktopMimeType(name: string): string {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  return ({
-    aac: "audio/aac", aiff: "audio/aiff", apng: "image/apng", avif: "image/avif",
-    avi: "video/x-msvideo", bmp: "image/bmp", flac: "audio/flac", gif: "image/gif",
-    ico: "image/x-icon", jpeg: "image/jpeg", jpg: "image/jpeg", m4a: "audio/mp4",
-    m4v: "video/mp4", mkv: "video/x-matroska", mov: "video/quicktime", mp3: "audio/mpeg",
-    mp4: "video/mp4", mpeg: "video/mpeg", oga: "audio/ogg", ogg: "audio/ogg",
-    ogv: "video/ogg", opus: "audio/opus", pdf: "application/pdf", png: "image/png",
-    svg: "image/svg+xml", tif: "image/tiff", tiff: "image/tiff", wav: "audio/wav",
-    weba: "audio/webm", webm: "video/webm", webp: "image/webp",
-  } as Record<string, string>)[extension] ?? "application/octet-stream";
 }
 
 function normalizeSnapshot(snapshot: NativeFileSnapshot): DesktopFileSnapshot {

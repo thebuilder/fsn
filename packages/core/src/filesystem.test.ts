@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canReadAsText, categoryOf, formatBytes, hasBytes, pathFor, searchFilesystem, type FsNode } from "./filesystem";
+import { canReadAsText, categoryOf, formatBytes, hasBytes, mediaExtensionSets, mimeTypeFor, pathFor, searchFilesystem, type FsNode } from "./filesystem";
 
 function directory(name: string, children: FsNode[]): FsNode {
   return { id: name, parentId: null, name, kind: "directory", children };
@@ -174,5 +174,29 @@ describe("filesystem search", () => {
 
     expect(outcome.complete).toBe(false);
     expect(elapsed).toBeLessThan(1000);
+  });
+
+  describe("mimeTypeFor", () => {
+    it("gives every media extension a concrete MIME type, not the generic fallback", () => {
+      for (const [family, extensions] of Object.entries(mediaExtensionSets)) {
+        for (const extension of extensions) {
+          const mime = mimeTypeFor(`x.${extension}`);
+          expect(mime, `${family} extension "${extension}"`).not.toBe("application/octet-stream");
+          if (family === "image") {
+            // Audio/video share containers across families (e.g. `weba` is audio/webm,
+            // `ogv` is video/ogg), so only image types can be asserted by prefix here.
+            expect(mime, `${family} extension "${extension}"`).toMatch(/^image\//);
+          }
+        }
+      }
+    });
+
+    it("pins the jfif regression that once desynced desktop's hand-maintained MIME map from core's classification", () => {
+      expect(mimeTypeFor("photo.jfif")).toBe("image/jpeg");
+    });
+
+    it("falls back to a generic type for names with no usable extension", () => {
+      expect(mimeTypeFor("Makefile")).toBe("application/octet-stream");
+    });
   });
 });
