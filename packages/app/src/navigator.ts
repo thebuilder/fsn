@@ -1003,12 +1003,17 @@ async function settleInitialView(): Promise<boolean> {
  */
 async function start(): Promise<void> {
   const settled = settleInitialView();
-  await Promise.race([settled, wait(600)]);
-  if (lifecycle.signal.aborted) return;
-  document.documentElement.dataset.boot = "ready";
-  // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
-  if (!(await settled) || lifecycle.signal.aborted) return;
-  welcomeDialog.showModal();
+  try {
+    await Promise.race([settled, wait(600)]);
+    if (lifecycle.signal.aborted) return;
+    // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
+    if (!(await settled) || lifecycle.signal.aborted) return;
+    welcomeDialog.showModal();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Startup failed", true);
+  } finally {
+    document.documentElement.dataset.boot = "ready";
+  }
 }
 
 void start();
