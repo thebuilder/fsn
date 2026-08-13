@@ -11,7 +11,8 @@
     "build:desktop": "pnpm --filter=@fsn/desktop tauri:build",
     "typecheck": "turbo run typecheck --cache-dir=.turbo/cache",
     "test": "turbo run test --cache-dir=.turbo/cache",
-    "check": "turbo run typecheck test build --cache-dir=.turbo/cache"
+    "check": "turbo run typecheck test build --cache-dir=.turbo/cache",
+    "validate:desktop-release": "node tools/validate-desktop-release.mjs"
   },
   "devDependencies": {
     "turbo": "^2.10.9"

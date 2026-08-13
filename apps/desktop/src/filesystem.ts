@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { basename } from "@tauri-apps/api/path";
 import {
-  canReadAsText,
   DIRECTORY_PEEK_LIMIT,
   categoryOf,
   sortNodes,
@@ -19,19 +17,19 @@ type NativeEntry = {
   isDirectory: boolean;
   isSymlink: boolean;
   size: number;
-  modified?: number;
+  modified: number | null;
   readonly: boolean;
   readable: boolean;
+  canEditText: boolean;
+  canOpenNative: boolean;
 };
 
-type NativeMetadata = {
-  size: number;
-  modified?: number;
-  isFile: boolean;
-  isDirectory: boolean;
-  isSymlink: boolean;
-  readonly: boolean;
+type PickedRoot = {
+  path: string;
+  entry: NativeEntry;
 };
+
+const nativeCapabilities = new Map<string, { canEditText: boolean; canOpenNative: boolean }>();
 
 export type DesktopFileSnapshot = {
   size: number;
@@ -46,49 +44,44 @@ export type DesktopWriteResult =
   | { status: "saved"; snapshot: DesktopFileSnapshot }
   | { status: "conflict"; actual: DesktopFileSnapshot };
 
+type NativeWriteResult =
+  | { status: "saved"; snapshot: NativeFileSnapshot }
+  | { status: "conflict"; actual: NativeFileSnapshot };
+
 export type DesktopReadResult = {
   blob: Blob;
   snapshot?: DesktopFileSnapshot;
 };
 
+type NativeFileSnapshot = Omit<DesktopFileSnapshot, "modified" | "modifiedNs"> & {
+  modified: number | null;
+  modifiedNs: string | null;
+};
+
 type NativeTextReadResult = {
   bytes: ArrayBuffer | number[];
-  snapshot: DesktopFileSnapshot;
+  snapshot: NativeFileSnapshot;
 };
 
 /** Opens a native folder picker and atomically replaces the active Rust grant. */
 export async function openDesktopDirectory(): Promise<FilesystemRoot | null> {
-  const path = await invoke<string | null>("pick_root");
-  return path ? rootFromDesktopPath(path, true) : null;
-}
-
-/** Builds a lazy root only when Rust confirms it is the active native grant. */
-export async function rootFromDesktopPath(
-  path: string,
-  alreadyAuthorized = false,
-): Promise<FilesystemRoot> {
-  const authorizedPath = alreadyAuthorized
-    ? path
-    : await invoke<string>("require_active_root", { path });
-  const info = await statDesktop(authorizedPath);
-  if (!info.isDirectory || info.isSymlink) {
-    throw new Error("The selected path is not a directory.");
-  }
-
-  const pathName = await basename(authorizedPath);
+  const picked = await invoke<PickedRoot | null>("pick_root");
+  if (!picked) return null;
   const root: FsNode = {
-    id: authorizedPath,
+    id: picked.path,
     parentId: null,
-    name: pathName || authorizedPath,
+    name: picked.entry.name,
     kind: "directory",
-    resource: { id: authorizedPath, readable: false },
+    modified: picked.entry.modified ?? undefined,
+    resource: { id: picked.path, readable: false },
   };
-
+  nativeCapabilities.clear();
   return { root, sourceLabel: "LOCAL DIRECTORY / DESKTOP", isLocal: true };
 }
 
 export async function clearDesktopRoot(): Promise<void> {
   await invoke("clear_active_root");
+  nativeCapabilities.clear();
 }
 
 export async function ensureChildren(parent: FsNode): Promise<FsNode[]> {
@@ -105,9 +98,13 @@ export async function ensureChildren(parent: FsNode): Promise<FsNode[]> {
       name: entry.name,
       kind: isDirectory ? "directory" : "file",
       size: entry.isFile ? entry.size : undefined,
-      modified: entry.modified,
+      modified: entry.modified ?? undefined,
       resource: { id: entry.path, readable: entry.isFile && !entry.isSymlink && entry.readable },
     };
+    nativeCapabilities.set(entry.path, {
+      canEditText: entry.canEditText,
+      canOpenNative: entry.canOpenNative,
+    });
     return node;
   });
 
@@ -153,7 +150,7 @@ export async function readDesktopResource(
 ): Promise<DesktopReadResult> {
   const path = desktopFilePath(node);
   signal?.throwIfAborted();
-  const loaded = canReadAsText(node)
+  const loaded = canEditDesktopText(node)
     ? await invoke<NativeTextReadResult>("read_text_native", { path })
     : {
         bytes: await invoke<ArrayBuffer | number[]>("read_file_native", {
@@ -169,7 +166,7 @@ export async function readDesktopResource(
   node.size = payload.byteLength;
   return {
     blob: new Blob([payload], { type: desktopMimeType(node.name) }),
-    snapshot: loaded.snapshot,
+    snapshot: loaded.snapshot ? normalizeSnapshot(loaded.snapshot) : undefined,
   };
 }
 
@@ -179,24 +176,30 @@ export async function writeDesktopText(
   text: string,
   expected: DesktopFileSnapshot,
 ): Promise<DesktopWriteResult> {
-  const result = await invoke<DesktopWriteResult>("write_text_atomic", {
+  const result = await invoke<NativeWriteResult>("write_text_atomic", {
     path: desktopFilePath(node),
     text,
     expected,
   });
-  if (result.status === "saved") {
-    node.size = result.snapshot.size;
-    node.modified = result.snapshot.modified;
+  if (result.status === "conflict") {
+    return { status: "conflict", actual: normalizeSnapshot(result.actual) };
   }
-  return result;
+  const snapshot = normalizeSnapshot(result.snapshot);
+  node.size = snapshot.size;
+  node.modified = snapshot.modified;
+  return { status: "saved", snapshot };
 }
 
 export async function openDesktopNative(node: FsNode): Promise<void> {
   await invoke("open_native", { path: desktopFilePath(node) });
 }
 
-function statDesktop(path: string): Promise<NativeMetadata> {
-  return invoke("stat_native", { path });
+export function canEditDesktopText(node: FsNode): boolean {
+  return Boolean(node.resource && nativeCapabilities.get(node.resource.id)?.canEditText);
+}
+
+export function canOpenDesktopNative(node: FsNode): boolean {
+  return Boolean(node.resource && nativeCapabilities.get(node.resource.id)?.canOpenNative);
 }
 
 function desktopDirectoryPath(node: FsNode): string | null {
@@ -223,4 +226,12 @@ function desktopMimeType(name: string): string {
     svg: "image/svg+xml", tif: "image/tiff", tiff: "image/tiff", wav: "audio/wav",
     weba: "audio/webm", webm: "video/webm", webp: "image/webp",
   } as Record<string, string>)[extension] ?? "application/octet-stream";
+}
+
+function normalizeSnapshot(snapshot: NativeFileSnapshot): DesktopFileSnapshot {
+  return {
+    ...snapshot,
+    modified: snapshot.modified ?? undefined,
+    modifiedNs: snapshot.modifiedNs ?? undefined,
+  };
 }

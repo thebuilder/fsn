@@ -11,6 +11,7 @@ import {
   type SearchOutcome,
 } from "@fsn/core";
 import { createDemoFilesystem } from "./demo";
+import { LatestSourceTransition } from "./filesystem-transition";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
 import { WorldScene, type NavigationDirection } from "./scene";
 import { FileViewer } from "./viewer";
@@ -18,9 +19,13 @@ import { FileViewer } from "./viewer";
 export type NavigatorHandle = {
   /** Returns false when an active editor refuses to discard its unsaved changes. */
   requestClose(): boolean;
+  /** Tears down listeners, rendering resources and the active filesystem. Idempotent. */
+  destroy(): Promise<void>;
 };
 
 export function mountNavigator(platform: NavigatorPlatform): NavigatorHandle {
+const lifecycle = new AbortController();
+const listener = { signal: lifecycle.signal };
 
 function getElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -86,6 +91,8 @@ const viewer = new FileViewer(
 let filesystem: FilesystemRoot = createDemoFilesystem(platform.demoResources);
 let ancestry: FsNode[] = [filesystem.root];
 let selectedNode: FsNode | null = null;
+let destroyPromise: Promise<void> | null = null;
+const sourceTransition = new LatestSourceTransition<FilesystemRoot>((source) => platform.disposeFilesystem?.(source));
 
 const world = new WorldScene(canvas, {
   onSelect: updateSelection,
@@ -184,6 +191,7 @@ function beginPending(): () => void {
 let renderGeneration = 0;
 
 async function renderDirectory(announce = true, direction: NavigationDirection = "backward"): Promise<void> {
+  if (lifecycle.signal.aborted) return;
   renderChrome();
   const generation = (renderGeneration += 1);
   const current = currentDirectory();
@@ -201,8 +209,10 @@ async function renderDirectory(announce = true, direction: NavigationDirection =
     } finally {
       settle();
     }
-    if (generation !== renderGeneration) return;
+    if (generation !== renderGeneration || lifecycle.signal.aborted) return;
   }
+
+  if (lifecycle.signal.aborted) return;
 
   world.setDirectory(current, children, direction);
   if (announce) setStatus(`${current.name} mounted · ${children.length} objects`);
@@ -239,7 +249,7 @@ function renderBreadcrumbs(): void {
     button.addEventListener("click", () => {
       ancestry = ancestry.slice(0, index + 1);
       void renderDirectory(true, "backward");
-    });
+    }, listener);
     // Animate crumbs that are genuinely new, plus the one that just became current
     // (so stepping back reads as a change rather than a silent restyle).
     if (!welcomeHold && (!previousCrumbIds.includes(node.id) || (isLeaf && previousLeaf !== node.id))) {
@@ -349,19 +359,30 @@ function goToRoot(): void {
  * `announcement` replaces the standard mount line for arrivals that need explaining.
  * Resolves once the world is drawn, which is what the boot sequence waits on.
  */
-async function setFilesystem(next: FilesystemRoot, announcement?: string): Promise<void> {
-  const previous = filesystem;
-  await platform.ensureChildren(next.root);
-  filesystem = next;
-  ancestry = [next.root];
-  ancestryById.clear();
-  const drawn = renderDirectory(!announcement, "initial");
-  if (announcement) setStatus(announcement);
-  try {
-    await drawn;
-  } finally {
-    if (previous !== next) await platform.disposeFilesystem?.(previous);
+async function setFilesystem(next: FilesystemRoot, announcement?: string): Promise<boolean> {
+  if (lifecycle.signal.aborted || !viewer.close()) {
+    if (next !== filesystem) await sourceTransition.dispose(next);
+    return false;
   }
+  return sourceTransition.replace(
+    next,
+    async (candidate) => {
+      await platform.ensureChildren(candidate.root);
+      if (lifecycle.signal.aborted) sourceTransition.invalidate();
+    },
+    (candidate) => {
+      // Preparation can take long enough for a new editor to open. The source hand-off
+      // is the destructive boundary, so consult the guard again immediately before it.
+      if (lifecycle.signal.aborted || !viewer.close()) return { status: "rejected" };
+      const previous = filesystem;
+      filesystem = candidate;
+      ancestry = [candidate.root];
+      ancestryById.clear();
+      const drawn = renderDirectory(!announcement, "initial");
+      if (announcement) setStatus(announcement);
+      return { status: "activated", previous, settled: drawn };
+    },
+  );
 }
 
 function setStatus(message: string, isError = false): void {
@@ -371,11 +392,14 @@ function setStatus(message: string, isError = false): void {
 }
 
 async function chooseFolder(): Promise<void> {
+  // Native pickers replace the adapter's active grant as part of selection. Refuse the
+  // operation before opening one so a declined discard cannot revoke the editor's root.
+  if (!viewer.close()) return;
   setStatus("Awaiting directory authorization…");
   try {
     const picked = await platform.pickDirectory();
     if (picked.status === "selected") {
-      await setFilesystem(picked.filesystem);
+      if (!(await setFilesystem(picked.filesystem))) return;
       void platform.rememberFilesystem(picked.filesystem);
       withdrawReopenOffer();
       welcomeDialog.close();
@@ -402,11 +426,11 @@ async function mountRememberedDirectory(source: Extract<RecalledSource, { mode: 
   try {
     const restored = source.filesystem;
     const count = restored.root.children?.length ?? 0;
-    await setFilesystem(
+    const mounted = await setFilesystem(
       restored,
       source.announcement ?? `Reopened ${restored.root.name} · ${count} ${count === 1 ? "object" : "objects"}`,
     );
-    return true;
+    return mounted;
   } catch {
     void platform.forgetSource();
     withdrawReopenOffer();
@@ -435,7 +459,7 @@ async function reopenRememberedDirectory(source: Extract<RecalledSource, { mode:
   try {
     const restored = await source.reopen();
     const count = restored.root.children?.length ?? 0;
-    await setFilesystem(restored, `Reopened ${source.name} · ${count} ${count === 1 ? "object" : "objects"}`);
+    if (!(await setFilesystem(restored, `Reopened ${source.name} · ${count} ${count === 1 ? "object" : "objects"}`))) return;
     void platform.rememberFilesystem(restored);
     withdrawReopenOffer();
   } catch (error) {
@@ -550,9 +574,9 @@ function renderMatches(matches: SearchMatch[]): void {
       const elsewhere = trail[trail.length - 1].id !== currentDirectory().id;
       detail.textContent = elsewhere ? `${measure} · ${trail.map((part) => part.name).join("/")}` : measure;
     }
-    button.addEventListener("click", () => revealMatch(match));
+    button.addEventListener("click", () => revealMatch(match), listener);
     // Keep pointer and keyboard on the same row, so there is only ever one highlight.
-    button.addEventListener("pointerenter", () => setActiveResult(index));
+    button.addEventListener("pointerenter", () => setActiveResult(index), listener);
     item.append(button);
     searchResults.append(item);
     resultButtons.push(button);
@@ -614,15 +638,16 @@ function trimName(name: string, length: number): string {
   return name.length > length ? `${name.slice(0, length - 1)}…` : name;
 }
 
-folderButton.addEventListener("click", () => void (pendingReopen ? reopenRememberedDirectory(pendingReopen) : chooseFolder()));
+folderButton.addEventListener("click", () => void (pendingReopen ? reopenRememberedDirectory(pendingReopen) : chooseFolder()), listener);
 demoButton.addEventListener("click", () => {
-  void setFilesystem(createDemoFilesystem(platform.demoResources));
-  void platform.rememberDemo();
-});
-enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode));
-searchButton.addEventListener("click", openSearch);
-helpButton.addEventListener("click", () => helpDialog.showModal());
-searchInput.addEventListener("input", () => renderSearchResults(searchInput.value));
+  void (async () => {
+    if (await setFilesystem(createDemoFilesystem(platform.demoResources))) await platform.rememberDemo();
+  })();
+}, listener);
+enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
+searchButton.addEventListener("click", openSearch, listener);
+helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
+searchInput.addEventListener("input", () => renderSearchResults(searchInput.value), listener);
 searchDialog.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
@@ -638,27 +663,30 @@ searchDialog.addEventListener("keydown", (event) => {
     event.preventDefault();
     active.click();
   }
-});
+}, listener);
 scopeCurrentButton.addEventListener("click", () => {
   applySearchScope("current");
   searchInput.focus();
-});
+}, listener);
 scopeAllButton.addEventListener("click", () => {
   applySearchScope("all");
   searchInput.focus();
-});
+}, listener);
 folderFallback.addEventListener("change", () => {
   if (!folderFallback.files || !platform.importSnapshot) return;
   const imported = platform.importSnapshot(folderFallback.files);
-  if (imported) void setFilesystem(imported);
-  welcomeDialog.close();
+  if (imported) {
+    void setFilesystem(imported).then((mounted) => {
+      if (mounted) welcomeDialog.close();
+    });
+  }
   folderFallback.value = "";
-});
+}, listener);
 getElement<HTMLAnchorElement>("brand-home").addEventListener("click", (event) => {
   event.preventDefault();
   goToRoot();
-});
-welcomeDemo.addEventListener("click", () => welcomeDialog.close());
+}, listener);
+welcomeDemo.addEventListener("click", () => welcomeDialog.close(), listener);
 /**
  * Dismissing the welcome screen is itself a choice. Whichever way it was closed —
  * the demo button, Escape, the backdrop — leaving on the demo means the demo is what
@@ -668,9 +696,9 @@ welcomeDemo.addEventListener("click", () => welcomeDialog.close());
 welcomeDialog.addEventListener("close", () => {
   releaseWhenWelcomeHasGone();
   if (!filesystem.isLocal) void platform.rememberDemo();
-});
+}, listener);
 
-getElement<HTMLButtonElement>("welcome-folder").addEventListener("click", () => void chooseFolder());
+getElement<HTMLButtonElement>("welcome-folder").addEventListener("click", () => void chooseFolder(), listener);
 
 /**
  * Waits for the screen to be gone rather than merely dismissed. Its backdrop is a
@@ -685,12 +713,12 @@ function releaseWhenWelcomeHasGone(): void {
   const release = (): void => {
     window.clearTimeout(failsafe);
     welcomeDialog.removeEventListener("transitionend", onDialogTransitionEnd);
-    releaseBehindWelcome();
+    if (!lifecycle.signal.aborted) releaseBehindWelcome();
   };
   const onDialogTransitionEnd = (event: TransitionEvent): void => {
     if (event.target === welcomeDialog && event.propertyName === "opacity") release();
   };
-  welcomeDialog.addEventListener("transitionend", onDialogTransitionEnd);
+  welcomeDialog.addEventListener("transitionend", onDialogTransitionEnd, listener);
   failsafe = window.setTimeout(release, 400);
 }
 
@@ -740,11 +768,11 @@ window.addEventListener("keydown", (event) => {
       void openNode(target);
     }
   }
-});
+}, listener);
 
 window.addEventListener("pointerdown", (event) => {
   if (event.button === 0) world.setKeyboardNavigationActive(false);
-});
+}, listener);
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -802,9 +830,10 @@ async function settleInitialView(): Promise<boolean> {
 async function start(): Promise<void> {
   const settled = settleInitialView();
   await Promise.race([settled, wait(600)]);
+  if (lifecycle.signal.aborted) return;
   document.documentElement.dataset.boot = "ready";
   // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
-  if (!(await settled)) return;
+  if (!(await settled) || lifecycle.signal.aborted) return;
   welcomeDialog.showModal();
 }
 
@@ -812,5 +841,15 @@ void start();
 
 return {
   requestClose: () => viewer.confirmDiscard(),
+  destroy: () => {
+    if (destroyPromise) return destroyPromise;
+    lifecycle.abort();
+    sourceTransition.invalidate();
+    renderGeneration += 1;
+    viewer.destroy();
+    world.destroy();
+    destroyPromise = sourceTransition.dispose(filesystem);
+    return destroyPromise;
+  },
 };
 }

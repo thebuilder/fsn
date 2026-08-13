@@ -95,8 +95,11 @@ export type ViewerHost = {
   handOff(rendererId: RendererId): void;
 };
 
-export type RendererId =
-  | "image" | "model" | "font" | "table" | "json" | "text"
-  | "media" | "pdf" | "archive" | "hex" | "denied";
+export const rendererIds = [
+  "image", "model", "font", "table", "json", "text",
+  "media", "pdf", "archive", "hex", "denied",
+] as const;
+
+export type RendererId = typeof rendererIds[number];
 
 export type Renderer = (host: ViewerHost) => void | Promise<void>;

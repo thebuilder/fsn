@@ -387,22 +387,10 @@
           "markdownDescription": "Enables the read_text_native command without any pre-configured scope."
         },
         {
-          "description": "Enables the require_active_root command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-require-active-root",
-          "markdownDescription": "Enables the require_active_root command without any pre-configured scope."
-        },
-        {
           "description": "Enables the respond_to_macos_quit command without any pre-configured scope.",
           "type": "string",
           "const": "allow-respond-to-macos-quit",
           "markdownDescription": "Enables the respond_to_macos_quit command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the stat_native command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-stat-native",
-          "markdownDescription": "Enables the stat_native command without any pre-configured scope."
         },
         {
           "description": "Enables the write_text_atomic command without any pre-configured scope.",
@@ -453,22 +441,10 @@
           "markdownDescription": "Denies the read_text_native command without any pre-configured scope."
         },
         {
-          "description": "Denies the require_active_root command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-require-active-root",
-          "markdownDescription": "Denies the require_active_root command without any pre-configured scope."
-        },
-        {
           "description": "Denies the respond_to_macos_quit command without any pre-configured scope.",
           "type": "string",
           "const": "deny-respond-to-macos-quit",
           "markdownDescription": "Denies the respond_to_macos_quit command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the stat_native command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-stat-native",
-          "markdownDescription": "Denies the stat_native command without any pre-configured scope."
         },
         {
           "description": "Denies the write_text_atomic command without any pre-configured scope.",

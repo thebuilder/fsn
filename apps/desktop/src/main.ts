@@ -1,10 +1,12 @@
 import { mountNavigator, type DemoResourceFactory, type NavigatorPlatform } from "@fsn/app";
-import { canReadAsText, categoryOf, type FsResource } from "@fsn/core";
+import type { FilesystemRoot, FsResource } from "@fsn/core";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   clearDesktopRoot,
+  canEditDesktopText,
+  canOpenDesktopNative,
   ensureChildren,
   openDesktopDirectory,
   openDesktopNative,
@@ -17,10 +19,6 @@ import {
 type DemoResource = { kind: "text"; content: string } | { kind: "url"; url: string };
 const demoResources = new Map<string, DemoResource>();
 const DESKTOP_MODE_KEY = "fsn.desktop.last-mode";
-const UNSAFE_NATIVE_EXTENSIONS = new Set([
-  "app", "bat", "bin", "cmd", "com", "command", "cpl", "dat", "desktop", "dll", "dylib",
-  "exe", "hta", "lnk", "msi", "pkg", "ps1", "reg", "scr", "sh", "so", "vbs",
-]);
 const writeSnapshots = new Map<string, DesktopFileSnapshot>();
 const conflictSnapshots = new Map<string, DesktopFileSnapshot>();
 
@@ -33,6 +31,18 @@ const demoFactory: DemoResourceFactory = {
   text: (id, content) => registerDemo(id, { kind: "text", content }),
   url: (id, url) => registerDemo(id, { kind: "url", url }),
 };
+
+function disposeDemoFilesystem(filesystem: FilesystemRoot): void {
+  const pending = [filesystem.root];
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node) continue;
+    if (node.resource && demoResources.has(node.resource.id)) {
+      demoResources.delete(node.resource.id);
+    }
+    pending.push(...(node.children ?? []));
+  }
+}
 
 const platform: NavigatorPlatform = {
   demoResources: demoFactory,
@@ -56,52 +66,55 @@ const platform: NavigatorPlatform = {
       const demo = node.resource ? demoResources.get(node.resource.id) : undefined;
       return demo?.kind === "url" ? demo.url : null;
     },
-    canOpenNative: (node) => Boolean(
-      node.resource?.readable
-      && !demoResources.has(node.resource.id)
-      && categoryOf(node) !== "system"
-      && !UNSAFE_NATIVE_EXTENSIONS.has(node.name.split(".").pop()?.toLowerCase() ?? "")
-    ),
-    openNative: async (node) => {
-      if (node.resource && demoResources.has(node.resource.id)) {
-        throw new Error("Demo objects do not have a native application.");
-      }
-      await openDesktopNative(node);
-    },
-    canWriteText: (node) => Boolean(
-      node.resource?.readable
-      && !demoResources.has(node.resource.id)
-      && canReadAsText(node)
-    ),
-    writeText: async (node, value, options) => {
-      if (node.resource && demoResources.has(node.resource.id)) {
-        throw new Error("Demo objects are read-only.");
-      }
-      const id = node.resource!.id;
-      let expected: DesktopFileSnapshot | undefined;
-      if (options?.force) {
-        expected = conflictSnapshots.get(id);
-        if (!expected) {
-          throw new Error("The changed file must be checked again before retrying the save.");
+    nativeOpen: {
+      supports: (node) => Boolean(
+        node.resource?.readable
+        && !demoResources.has(node.resource.id)
+        && canOpenDesktopNative(node),
+      ),
+      open: async (node) => {
+        if (node.resource && demoResources.has(node.resource.id)) {
+          throw new Error("Demo objects do not have a native application.");
         }
-      } else {
-        expected = writeSnapshots.get(id);
-      }
-      if (!expected) {
-        throw new Error("Reopen this file before saving so FSN can verify its original revision.");
-      }
-      const result = await writeDesktopText(node, value, expected);
-      if (result.status === "conflict") {
-        conflictSnapshots.set(id, result.actual);
-        return { status: "conflict" };
-      }
-      conflictSnapshots.delete(id);
-      writeSnapshots.set(id, result.snapshot);
-      return {
-        status: "saved",
-        size: result.snapshot.size,
-        modified: result.snapshot.modified,
-      };
+        await openDesktopNative(node);
+      },
+    },
+    textEditing: {
+      supports: (node) => Boolean(
+        node.resource?.readable
+        && !demoResources.has(node.resource.id)
+        && canEditDesktopText(node),
+      ),
+      write: async (node, value, options) => {
+        if (node.resource && demoResources.has(node.resource.id)) {
+          throw new Error("Demo objects are read-only.");
+        }
+        const id = node.resource!.id;
+        let expected: DesktopFileSnapshot | undefined;
+        if (options?.force) {
+          expected = conflictSnapshots.get(id);
+          if (!expected) {
+            throw new Error("The changed file must be checked again before retrying the save.");
+          }
+        } else {
+          expected = writeSnapshots.get(id);
+        }
+        if (!expected) {
+          throw new Error("Reopen this file before saving so FSN can verify its original revision.");
+        }
+        const result = await writeDesktopText(node, value, expected);
+        if (result.status === "conflict") {
+          conflictSnapshots.set(id, result.actual);
+          return { status: "conflict" };
+        }
+        conflictSnapshots.delete(id);
+        writeSnapshots.set(id, result.snapshot);
+        return {
+          status: "saved",
+          size: result.snapshot.size,
+          modified: result.snapshot.modified,
+        };
+      },
     },
   },
   pickDirectory: async () => {
@@ -114,29 +127,23 @@ const platform: NavigatorPlatform = {
   },
   ensureChildren,
   peekChildren,
+  disposeFilesystem: disposeDemoFilesystem,
   rememberDemo: async () => {
     await clearDesktopRoot();
     writeSnapshots.clear();
     conflictSnapshots.clear();
-    storeDesktopMode("demo");
+    storeDemoMode(true);
   },
-  rememberFilesystem: async (filesystem) => {
-    void filesystem;
-    storeDesktopMode("filesystem");
+  rememberFilesystem: async () => {
+    storeDemoMode(false);
   },
   recallSource: async () => {
-    if (readDesktopMode() === "demo") {
+    if (readDemoMode()) {
       await clearDesktopRoot();
       return { mode: "demo" };
     }
     // Native folder grants are deliberately session-only; stale webview paths
     // must never become authorization after a relaunch.
-    if (readDesktopMode() === "filesystem") {
-      await clearDesktopRoot();
-      writeSnapshots.clear();
-      conflictSnapshots.clear();
-      storeDesktopMode(null);
-    }
     await clearDesktopRoot();
     return { mode: "none" };
   },
@@ -144,7 +151,7 @@ const platform: NavigatorPlatform = {
     await clearDesktopRoot();
     writeSnapshots.clear();
     conflictSnapshots.clear();
-    storeDesktopMode(null);
+    storeDemoMode(false);
   },
 };
 
@@ -156,42 +163,64 @@ const viewerChannel = document.getElementById("viewer-channel");
 if (viewerChannel) viewerChannel.replaceChildren(Object.assign(document.createElement("i"), { className: "viewer-led" }), " LOCAL DESKTOP CHANNEL");
 
 const navigator = mountNavigator(platform);
+let disposeNativeLifecycle: (() => void) | undefined;
+let disposed = false;
+
+import.meta.hot?.dispose(() => {
+  disposed = true;
+  disposeNativeLifecycle?.();
+  void navigator.destroy();
+});
 
 if (isTauri()) {
-  void installNativeLifecycle();
+  void installNativeLifecycle().then((dispose) => {
+    if (disposed) dispose();
+    else disposeNativeLifecycle = dispose;
+  }).catch((error: unknown) => {
+    console.error("Could not install the native window lifecycle", error);
+  });
 }
 
-async function installNativeLifecycle(): Promise<void> {
+async function installNativeLifecycle(): Promise<() => void> {
   const unlistenQuit = await listen<{ requestId: number }>("fsn://quit-requested", (event) => {
     void invoke("respond_to_macos_quit", {
       requestId: event.payload.requestId,
       confirmed: navigator.requestClose(),
     });
   });
-  const unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
-    if (!navigator.requestClose()) event.preventDefault();
-  });
-  await invoke("macos_quit_bridge_ready");
-  import.meta.hot?.dispose(() => {
+  try {
+    const unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
+      if (!navigator.requestClose()) event.preventDefault();
+    });
+    try {
+      await invoke("macos_quit_bridge_ready");
+      return () => {
+        unlistenQuit();
+        unlistenClose();
+      };
+    } catch (error) {
+      unlistenClose();
+      throw error;
+    }
+  } catch (error) {
     unlistenQuit();
-    unlistenClose();
-  });
+    throw error;
+  }
 }
 
-function storeDesktopMode(mode: "demo" | "filesystem" | null): void {
+function storeDemoMode(isDemo: boolean): void {
   try {
-    if (mode) localStorage.setItem(DESKTOP_MODE_KEY, mode);
+    if (isDemo) localStorage.setItem(DESKTOP_MODE_KEY, "demo");
     else localStorage.removeItem(DESKTOP_MODE_KEY);
   } catch {
     // A remembered location is optional; the current session remains fully usable.
   }
 }
 
-function readDesktopMode(): "demo" | "filesystem" | null {
+function readDemoMode(): boolean {
   try {
-    const mode = localStorage.getItem(DESKTOP_MODE_KEY);
-    return mode === "demo" || mode === "filesystem" ? mode : null;
+    return localStorage.getItem(DESKTOP_MODE_KEY) === "demo";
   } catch {
-    return null;
+    return false;
   }
 }

@@ -71,4 +71,8 @@ const platform: NavigatorPlatform = {
   forgetSource,
 };
 
-mountNavigator(platform);
+const navigator = mountNavigator(platform);
+
+import.meta.hot?.dispose(() => {
+  void navigator.destroy();
+});

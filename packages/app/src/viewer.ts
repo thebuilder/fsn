@@ -34,11 +34,15 @@ export type ViewerElements = {
 export type ViewerIO = {
   read(node: FsNode, signal: AbortSignal): Promise<Blob>;
   directUrl(node: FsNode): string | null;
-  canOpenNative?: (node: FsNode) => boolean;
-  openNative?: (node: FsNode) => Promise<void>;
   openExternalUrl?: (url: string) => Promise<void>;
-  canWriteText?: (node: FsNode) => boolean;
-  writeText?: (node: FsNode, value: string, options?: TextWriteOptions) => Promise<TextWriteResult>;
+  nativeOpen?: {
+    supports(node: FsNode): boolean;
+    open(node: FsNode): Promise<void>;
+  };
+  textEditing?: {
+    supports(node: FsNode): boolean;
+    write(node: FsNode, value: string, options?: TextWriteOptions): Promise<TextWriteResult>;
+  };
 };
 
 /** The inline size a zoomed window returns to, plus the drag offset it had. */
@@ -64,6 +68,7 @@ const FULLSCREEN_WINDOW = "(max-width: 600px)";
  * pays for the kinds of file a session actually opens.
  */
 export class FileViewer {
+  private readonly lifecycle = new AbortController();
   private controller = new AbortController();
   private disposers: Array<() => void> = [];
   private objectUrls: string[] = [];
@@ -84,37 +89,38 @@ export class FileViewer {
     private readonly elements: ViewerElements,
     private readonly io: ViewerIO,
   ) {
+    const listener = { signal: this.lifecycle.signal };
     elements.close.addEventListener("click", () => {
       if (this.canDiscard()) elements.dialog.close();
-    });
+    }, listener);
     elements.dialog.addEventListener("cancel", (event) => {
       if (!this.canDiscard()) event.preventDefault();
-    });
+    }, listener);
     // `close` is delivered asynchronously, so a dialog that has already been reopened
     // for the next object would otherwise be torn down by the previous one's event.
     elements.dialog.addEventListener("close", () => {
       if (!elements.dialog.open) this.reset();
-    });
+    }, listener);
     elements.zoom.addEventListener("click", () => {
       this.setCollapsed(false);
       this.setMaximized(!this.maximized);
-    });
-    elements.collapse.addEventListener("click", () => this.setCollapsed(!this.collapsed));
-    elements.titlebar.addEventListener("pointerdown", (event) => this.startDrag(event));
+    }, listener);
+    elements.collapse.addEventListener("click", () => this.setCollapsed(!this.collapsed), listener);
+    elements.titlebar.addEventListener("pointerdown", (event) => this.startDrag(event), listener);
     elements.titlebar.addEventListener("dblclick", (event) => {
       if (!(event.target as HTMLElement).closest("button")) this.setCollapsed(!this.collapsed);
-    });
-    elements.grow.addEventListener("pointerdown", (event) => this.startResize(event));
-    elements.grow.addEventListener("keydown", (event) => this.resizeByKey(event));
+    }, listener);
+    elements.grow.addEventListener("pointerdown", (event) => this.startResize(event), listener);
+    elements.grow.addEventListener("keydown", (event) => this.resizeByKey(event), listener);
     window.addEventListener("resize", () => {
       this.scheduleFit();
       this.applyGeometry();
-    });
+    }, listener);
     window.addEventListener("beforeunload", (event) => {
       if (!this.discardGuard) return;
       event.preventDefault();
       event.returnValue = "";
-    });
+    }, listener);
   }
 
   async open(node: FsNode, path: string): Promise<void> {
@@ -144,6 +150,19 @@ export class FileViewer {
     return this.canDiscard();
   }
 
+  /** Closes the current object only after its renderer accepts losing unsaved state. */
+  close(): boolean {
+    if (this.elements.dialog.open && !this.canDiscard()) return false;
+    if (this.elements.dialog.open) this.elements.dialog.close();
+    this.reset();
+    return true;
+  }
+
+  destroy(): void {
+    this.lifecycle.abort();
+    this.closeWithoutConfirmation();
+  }
+
   private async dispatch(entry: ReturnType<typeof rendererFor>, node: FsNode, path: string): Promise<void> {
     const { signal } = this.controller;
     this.elements.position.textContent = "READING OBJECT…";
@@ -168,6 +187,7 @@ export class FileViewer {
 
   private hostFor(node: FsNode, path: string, signal: AbortSignal): ViewerHost {
     const blob = (): Promise<Blob> => (this.payload ??= this.readPayload(node, signal));
+    const textEditing = this.io.textEditing?.supports(node) ? this.io.textEditing : undefined;
     return {
       node,
       path,
@@ -211,9 +231,9 @@ export class FileViewer {
       addToggle: (spec) => this.addToggle(spec, signal),
       addChoice: (spec) => this.addChoice(spec, signal),
       addAction: (spec) => this.addAction(spec, signal),
-      writeText: this.io.writeText && (this.io.canWriteText?.(node) ?? true)
+      writeText: textEditing
         ? async (value: string, options?: TextWriteOptions) => {
-            const result = await this.io.writeText!(node, value, options);
+            const result = await textEditing.write(node, value, options);
             if (result.status === "saved") this.elements.size.textContent = formatBytes(result.size);
             return result;
           }
@@ -287,7 +307,8 @@ export class FileViewer {
   }
 
   private addPlatformActions(node: FsNode, signal: AbortSignal): void {
-    if (!this.io.openNative || !(this.io.canOpenNative?.(node) ?? true)) return;
+    const nativeOpen = this.io.nativeOpen;
+    if (!nativeOpen?.supports(node)) return;
     this.addAction(
       {
         label: "OPEN IN NATIVE APP",
@@ -295,7 +316,7 @@ export class FileViewer {
         onActivate: async () => {
           this.elements.position.textContent = "OPENING NATIVE APPLICATION…";
           try {
-            await this.io.openNative!(node);
+            await nativeOpen.open(node);
             if (!signal.aborted) this.elements.position.textContent = "OPENED IN NATIVE APPLICATION";
           } catch (error) {
             if (!signal.aborted) {
@@ -571,6 +592,11 @@ export class FileViewer {
     this.discardGuard = null;
     this.elements.content.querySelectorAll("audio, video").forEach((element) => (element as HTMLMediaElement).pause());
     this.elements.tools.replaceChildren();
+  }
+
+  private closeWithoutConfirmation(): void {
+    if (this.elements.dialog.open) this.elements.dialog.close();
+    this.reset();
   }
 
   private canDiscard(): boolean {

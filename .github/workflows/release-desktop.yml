@@ -19,8 +19,6 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10.14.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -36,14 +34,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate release tag
+        run: pnpm validate:desktop-release "${{ github.ref_name }}"
+
+      - name: Check workspace
+        run: pnpm check
+
+      - name: Check native backend
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+
       - name: Build and create draft release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: v__VERSION__
-          releaseName: FSN v__VERSION__
+          tagName: ${{ github.ref_name }}
+          releaseName: FSN ${{ github.ref_name }}
           releaseBody: |
             > Preview build: this macOS application is currently unsigned and not notarized. macOS may block it or require manual approval under System Settings > Privacy & Security.
 

@@ -119,7 +119,15 @@ Create a local desktop bundle for the current operating system with:
 pnpm build:desktop
 ```
 
-Signing, notarization, and store publishing are separate release steps. The shared demo model is generated; regenerate it with:
+Push a version tag matching `apps/desktop/package.json` to create an unsigned Apple Silicon draft prerelease:
+
+```sh
+pnpm validate:desktop-release v0.1.0
+git tag -a v0.1.0 -m "FSN desktop v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow verifies the workspace and Rust backend before uploading the app and DMG. Signing and notarization remain separate release steps. The shared demo model is generated; regenerate it with:
 
 ```sh
 node packages/app/tools/make-demo-model.mjs

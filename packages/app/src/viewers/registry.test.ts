@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FsNode } from "@fsn/core";
-import { rendererFor } from "./registry";
+import { rendererById, rendererFor } from "./registry";
+import { rendererIds } from "./types";
 
 function readableFile(name: string): FsNode {
   return {
@@ -14,6 +15,10 @@ function readableFile(name: string): FsNode {
 }
 
 describe("viewer registry", () => {
+  it("has an explicit loader for every renderer id", () => {
+    expect(rendererIds.map((id) => rendererById(id).id)).toEqual(rendererIds);
+  });
+
   it.each(["README.md", "component.mdx", "workflow.yml", "compose.yaml", "Cargo.toml", ".env.local"])(
     "routes %s to the text viewer",
     (name) => {

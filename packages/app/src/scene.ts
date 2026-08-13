@@ -534,6 +534,8 @@ const GRID_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 export class WorldScene {
+  private readonly lifecycle = new AbortController();
+  private readonly resizeObserver: ResizeObserver;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -657,25 +659,27 @@ export class WorldScene {
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
 
-    this.canvas.addEventListener("pointermove", this.onPointerMove);
-    this.canvas.addEventListener("pointerdown", this.onPointerDown);
-    this.canvas.addEventListener("pointerup", this.onPointerUp);
-    this.canvas.addEventListener("pointercancel", this.onPointerCancel);
+    const listener = { signal: this.lifecycle.signal };
+    this.canvas.addEventListener("pointermove", this.onPointerMove, listener);
+    this.canvas.addEventListener("pointerdown", this.onPointerDown, listener);
+    this.canvas.addEventListener("pointerup", this.onPointerUp, listener);
+    this.canvas.addEventListener("pointercancel", this.onPointerCancel, listener);
     // Captured on the window, which is the only place that reliably runs before the
     // controls' own listener on the canvas: handing the controls back first is what
     // lets the gesture that ends the establishing shot also orbit, rather than being
     // spent on stopping the camera.
-    window.addEventListener("pointerdown", this.takeOverFlight, true);
-    window.addEventListener("wheel", this.takeOverFlight, { capture: true, passive: true });
-    this.canvas.addEventListener("dblclick", this.onDoubleClick);
-    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    window.addEventListener("pointerdown", this.takeOverFlight, { capture: true, signal: this.lifecycle.signal });
+    window.addEventListener("wheel", this.takeOverFlight, { capture: true, passive: true, signal: this.lifecycle.signal });
+    this.canvas.addEventListener("dblclick", this.onDoubleClick, listener);
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault(), listener);
     // Capture phase: a key release must reach us even if something nearer the target
     // stops the event, or the camera would keep drifting with nothing to cancel it.
-    window.addEventListener("keydown", this.onKeyDown, true);
-    window.addEventListener("keyup", this.onKeyUp, true);
-    window.addEventListener("blur", this.releaseMovement);
-    document.addEventListener("visibilitychange", this.onVisibilityChange);
-    new ResizeObserver(this.resize).observe(canvas);
+    window.addEventListener("keydown", this.onKeyDown, { capture: true, signal: this.lifecycle.signal });
+    window.addEventListener("keyup", this.onKeyUp, { capture: true, signal: this.lifecycle.signal });
+    window.addEventListener("blur", this.releaseMovement, listener);
+    document.addEventListener("visibilitychange", this.onVisibilityChange, listener);
+    this.resizeObserver = new ResizeObserver(this.resize);
+    this.resizeObserver.observe(canvas);
     this.animate();
   }
 
@@ -1715,12 +1719,9 @@ export class WorldScene {
 
   destroy(): void {
     cancelAnimationFrame(this.frame);
-    window.removeEventListener("keydown", this.onKeyDown, true);
-    window.removeEventListener("keyup", this.onKeyUp, true);
-    window.removeEventListener("pointerdown", this.takeOverFlight, true);
-    window.removeEventListener("wheel", this.takeOverFlight, true);
-    window.removeEventListener("blur", this.releaseMovement);
-    document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    this.lifecycle.abort();
+    this.resizeObserver.disconnect();
+    this.controls.dispose();
     this.disposeWorld();
     this.renderer.dispose();
   }
