@@ -22,7 +22,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
     "typescript": "^5.9.2",
-    "vite": "^7.1.2",
-    "vitest": "^3.2.4"
+    "vite": "^8",
+    "vitest": "^4"
   }
 }
