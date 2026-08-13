@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createOnsetDetector } from "./audio-analyser";
+import { createAudioAnalyser, createOnsetDetector } from "./audio-analyser";
 
 const FRAME = 1 / 60;
 
@@ -87,5 +87,15 @@ describe("onset detection", () => {
   it("ignores a quiet passage that is merely louder than silence", () => {
     // Ratio alone would trigger here; the absolute floor is what rejects it.
     expect(run(new Array(200).fill(0).map((_, frame) => (frame % 30 === 0 ? 0.03 : 0.001))).hits).toEqual([]);
+  });
+});
+
+describe("audio analyser buffers", () => {
+  it("reads a waveform pinned to silence's midpoint before start() is ever called", () => {
+    const analyser = createAudioAnalyser({} as HTMLMediaElement);
+
+    const signal = analyser.read(0, 0, false);
+
+    expect(Array.from(signal.waveform).every((byte) => byte === 128)).toBe(true);
   });
 });
