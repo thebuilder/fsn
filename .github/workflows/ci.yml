@@ -48,6 +48,12 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri
 
+      - name: Provide an empty webview dist
+        # tauri::generate_context!() requires frontendDist ("../dist") to exist at
+        # compile time; the check job verifies the Rust crate in isolation and never
+        # builds the webview, so an empty directory stands in for it.
+        run: mkdir -p apps/desktop/dist
+
       - name: Check native backend
         working-directory: apps/desktop/src-tauri
         run: |
