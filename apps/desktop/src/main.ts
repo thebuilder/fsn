@@ -165,14 +165,14 @@ document.getElementById("help-history")?.remove();
 const viewerChannel = document.getElementById("viewer-channel");
 if (viewerChannel) viewerChannel.replaceChildren(Object.assign(document.createElement("i"), { className: "viewer-led" }), " LOCAL DESKTOP CHANNEL");
 
-const navigator = mountNavigator(platform);
+const fsn = mountNavigator(platform);
 let disposeNativeLifecycle: (() => void) | undefined;
 let disposed = false;
 
 import.meta.hot?.dispose(() => {
   disposed = true;
   disposeNativeLifecycle?.();
-  void navigator.destroy();
+  void fsn.destroy();
 });
 
 if (isTauri()) {
@@ -190,7 +190,7 @@ async function installNativeLifecycle(): Promise<() => void> {
       const requestId = event.payload.requestId;
       let confirmed = false;
       try {
-        confirmed = navigator.requestClose();
+        confirmed = fsn.requestClose();
       } catch (error) {
         console.error("Quit guard failed; refusing the quit to protect unsaved work.", error);
       }
@@ -203,7 +203,7 @@ async function installNativeLifecycle(): Promise<() => void> {
   });
   try {
     const unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
-      if (!navigator.requestClose()) event.preventDefault();
+      if (!fsn.requestClose()) event.preventDefault();
     });
     try {
       await invoke("macos_quit_bridge_ready");

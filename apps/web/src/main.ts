@@ -82,8 +82,8 @@ const platform: NavigatorPlatform = {
   forgetSource,
 };
 
-const navigator = mountNavigator(platform);
+const fsn = mountNavigator(platform);
 
 import.meta.hot?.dispose(() => {
-  void navigator.destroy();
+  void fsn.destroy();
 });
