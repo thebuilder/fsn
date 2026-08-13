@@ -285,6 +285,38 @@ export function searchFilesystem(
   return { matches: candidates.slice(0, options.limit), total, unreadDirectories, complete };
 }
 
+/**
+ * The unread frontier under `base`: directories whose contents search cannot see.
+ * Breadth-first and capped, so one deepening step reads the shallowest unknowns first.
+ * Pure, no I/O — it only reports which nodes a caller could read next.
+ */
+export function unreadDirectoriesUnder(
+  base: FsNode,
+  limit: number,
+  exclude?: ReadonlySet<string>,
+): FsNode[] {
+  const frontier: FsNode[] = [];
+  // Same index-cursor queue as searchFilesystem, for the same reason: growing the
+  // frontier stays O(1) instead of paying to shift the array on every directory visited.
+  const queue: FsNode[] = [base];
+  let head = 0;
+  while (head < queue.length && frontier.length < limit) {
+    const node = queue[head];
+    head += 1;
+    for (const child of node.children ?? []) {
+      if (child.kind !== "directory") continue;
+      if (child.children) {
+        queue.push(child);
+        continue;
+      }
+      if (exclude?.has(child.id)) continue;
+      frontier.push(child);
+      if (frontier.length >= limit) break;
+    }
+  }
+  return frontier;
+}
+
 /** Name matches sort ahead of the rest: whole prefix, then word start, then anywhere. */
 function matchRank(name: string, query: string): number {
   if (!query) return 2;

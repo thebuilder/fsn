@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canReadAsText, categoryOf, formatBytes, hasBytes, mediaExtensionSets, mimeTypeFor, pathFor, searchFilesystem, type FsNode } from "./filesystem";
+import { canReadAsText, categoryOf, formatBytes, hasBytes, mediaExtensionSets, mimeTypeFor, pathFor, searchFilesystem, unreadDirectoriesUnder, type FsNode } from "./filesystem";
 
 function directory(name: string, children: FsNode[]): FsNode {
   return { id: name, parentId: null, name, kind: "directory", children };
@@ -174,6 +174,46 @@ describe("filesystem search", () => {
 
     expect(outcome.complete).toBe(false);
     expect(elapsed).toBeLessThan(1000);
+  });
+
+  describe("unreadDirectoriesUnder", () => {
+    function unreadDir(name: string): FsNode {
+      return { id: name, parentId: null, name, kind: "directory" };
+    }
+
+    function frontierTree(): FsNode {
+      // Unread directories at three different depths, mixed in with read ones,
+      // so a breadth-first walk is the only way to get shallowest-first output.
+      return directory("root", [
+        directory("readA", [unreadDir("unreadA1")]),
+        unreadDir("unreadB"),
+        directory("readC", [directory("readD", [unreadDir("unreadC1")])]),
+      ]);
+    }
+
+    it("returns the unread frontier shallowest-first", () => {
+      const frontier = unreadDirectoriesUnder(frontierTree(), 10);
+
+      expect(frontier.map((node) => node.name)).toEqual(["unreadB", "unreadA1", "unreadC1"]);
+    });
+
+    it("stops at the limit", () => {
+      const frontier = unreadDirectoriesUnder(frontierTree(), 2);
+
+      expect(frontier.map((node) => node.name)).toEqual(["unreadB", "unreadA1"]);
+    });
+
+    it("returns nothing for a fully-read tree", () => {
+      const root = directory("root", [directory("a", []), directory("b", [directory("c", [])])]);
+
+      expect(unreadDirectoriesUnder(root, 10)).toEqual([]);
+    });
+
+    it("skips excluded directories", () => {
+      const frontier = unreadDirectoriesUnder(frontierTree(), 10, new Set(["unreadB"]));
+
+      expect(frontier.map((node) => node.name)).toEqual(["unreadA1", "unreadC1"]);
+    });
   });
 
   describe("mimeTypeFor", () => {

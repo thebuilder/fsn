@@ -5,6 +5,7 @@ import {
   pathFor,
   searchFilesystem,
   sortNodes,
+  unreadDirectoriesUnder,
   type FilesystemRoot,
   type FsNode,
   type SearchMatch,
@@ -58,6 +59,7 @@ const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
 const searchCount = getElement<HTMLElement>("search-count");
+const searchDeepen = getElement<HTMLButtonElement>("search-deepen");
 const scopeSwitch = getElement<HTMLElement>("scope-switch");
 const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
 const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
@@ -673,8 +675,20 @@ let searchScope: "current" | "all" = "current";
 let resultButtons: HTMLButtonElement[] = [];
 let activeResultIndex = -1;
 
+/** How many unread directories one click of READ DEEPER pulls in. */
+const SEARCH_DEEPEN_BATCH = 64;
+/** How many of those reads run at once, so one slow handle does not stall the rest of the batch. */
+const SEARCH_DEEPEN_CONCURRENCY = 8;
+/**
+ * Directories this dialog session already tried to read — successfully or not. Scoped
+ * to one dialog's lifetime and cleared on open, so a permission grant made after closing
+ * search gets a fresh chance instead of being remembered as a dead end forever.
+ */
+const attemptedUnread = new Set<string>();
+
 function openSearch(): void {
   searchInput.value = "";
+  attemptedUnread.clear();
   applySearchScope(searchScope);
   searchDialog.showModal();
   searchInput.focus();
@@ -706,6 +720,8 @@ function renderSearchResults(query: string): void {
 
   if (!trimmed) {
     // An empty box browses the level you are standing on; listing whole trees is noise.
+    // There is no search outcome to deepen here, so the button stays out of the way.
+    searchDeepen.hidden = true;
     if (scope === "all") {
       searchCount.textContent = "";
       searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
@@ -725,6 +741,64 @@ function renderSearchResults(query: string): void {
   const outcome = searchFilesystem(base, trimmed, { limit: searchResultLimit });
   searchCount.textContent = describeOutcome(outcome);
   renderMatches(outcome.matches);
+  updateDeepenButton(outcome, scope);
+}
+
+/**
+ * Shows READ DEEPER only when there is somewhere left to read: the search itself
+ * reported unread directories, and the frontier under this scope (minus whatever this
+ * dialog session already tried) is not empty. The bounded walk below is what the click
+ * would read anyway, so computing it here is not a second full search — it is capped at
+ * the same batch size and doubles as the count in the button's label.
+ */
+function updateDeepenButton(outcome: SearchOutcome, scope: "current" | "all"): void {
+  if (outcome.unreadDirectories === 0) {
+    searchDeepen.hidden = true;
+    return;
+  }
+  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
+  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
+  searchDeepen.hidden = frontier.length === 0;
+  if (frontier.length > 0) {
+    searchDeepen.textContent = `READ ${Math.min(frontier.length, SEARCH_DEEPEN_BATCH)} MORE DIRECTORIES`;
+  }
+}
+
+/**
+ * Reads a batch of the unread frontier through the platform adapter, then re-runs the
+ * query so results, counts and the button itself all catch up to what got read. A
+ * directory that fails (denied, vanished) just stays unread — it is marked attempted so
+ * this session will not spend another read on it.
+ */
+async function deepenSearch(): Promise<void> {
+  const scope = effectiveSearchScope();
+  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
+  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
+  if (!frontier.length) return;
+  for (const node of frontier) attemptedUnread.add(node.id);
+  searchDeepen.disabled = true;
+  const settle = beginPending();
+  try {
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < frontier.length) {
+        const node = frontier[next];
+        next += 1;
+        try {
+          await platform.ensureChildren(node);
+        } catch {
+          // Swallowed: a denied or vanished directory just stays unread, and
+          // attemptedUnread already keeps this session from retrying it.
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SEARCH_DEEPEN_CONCURRENCY, frontier.length) }, worker));
+  } finally {
+    settle();
+    searchDeepen.disabled = false;
+    // A read that lands after the dialog closed only warms the cache — no DOM to update.
+    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value);
+  }
 }
 
 function renderMatches(matches: SearchMatch[]): void {
@@ -848,6 +922,7 @@ demoButton.addEventListener("click", () => {
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
 refreshButton.addEventListener("click", () => void refreshDirectory(), listener);
 searchButton.addEventListener("click", openSearch, listener);
+searchDeepen.addEventListener("click", () => void deepenSearch(), listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
 searchInput.addEventListener("input", scheduleSearchRender, listener);
 searchDialog.addEventListener("keydown", (event) => {
