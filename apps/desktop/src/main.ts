@@ -12,15 +12,14 @@ import {
   openDesktopNative,
   peekChildren,
   readDesktopResource,
-  type DesktopFileSnapshot,
   writeDesktopText,
 } from "./filesystem";
+import { createWriteProtocol } from "./write-protocol";
 
 type DemoResource = { kind: "text"; content: string } | { kind: "url"; url: string };
 const demoResources = new Map<string, DemoResource>();
 const DESKTOP_MODE_KEY = "fsn.desktop.last-mode";
-const writeSnapshots = new Map<string, DesktopFileSnapshot>();
-const conflictSnapshots = new Map<string, DesktopFileSnapshot>();
+const writeProtocol = createWriteProtocol();
 
 const registerDemo = (id: string, resource: DemoResource): FsResource => {
   demoResources.set(id, resource);
@@ -56,10 +55,7 @@ const platform: NavigatorPlatform = {
         return response.blob();
       }
       const loaded = await readDesktopResource(node, signal);
-      if (loaded.snapshot) {
-        writeSnapshots.set(node.resource!.id, loaded.snapshot);
-        conflictSnapshots.delete(node.resource!.id);
-      }
+      writeProtocol.recordRead(node.resource!.id, loaded.snapshot);
       return loaded.blob;
     },
     directUrl: (node) => {
@@ -90,25 +86,13 @@ const platform: NavigatorPlatform = {
           throw new Error("Demo objects are read-only.");
         }
         const id = node.resource!.id;
-        let expected: DesktopFileSnapshot | undefined;
-        if (options?.force) {
-          expected = conflictSnapshots.get(id);
-          if (!expected) {
-            throw new Error("The changed file must be checked again before retrying the save.");
-          }
-        } else {
-          expected = writeSnapshots.get(id);
-        }
-        if (!expected) {
-          throw new Error("Reopen this file before saving so FSN can verify its original revision.");
-        }
+        const expected = writeProtocol.expectedFor(id, Boolean(options?.force));
         const result = await writeDesktopText(node, value, expected);
         if (result.status === "conflict") {
-          conflictSnapshots.set(id, result.actual);
+          writeProtocol.recordConflict(id, result.actual);
           return { status: "conflict" };
         }
-        conflictSnapshots.delete(id);
-        writeSnapshots.set(id, result.snapshot);
+        writeProtocol.recordSaved(id, result.snapshot);
         return {
           status: "saved",
           size: result.snapshot.size,
@@ -120,8 +104,7 @@ const platform: NavigatorPlatform = {
   pickDirectory: async () => {
     const filesystem = await openDesktopDirectory();
     if (filesystem) {
-      writeSnapshots.clear();
-      conflictSnapshots.clear();
+      writeProtocol.clear();
     }
     return filesystem ? { status: "selected", filesystem } : { status: "cancelled" };
   },
@@ -130,8 +113,7 @@ const platform: NavigatorPlatform = {
   disposeFilesystem: disposeDemoFilesystem,
   rememberDemo: async () => {
     await clearDesktopRoot();
-    writeSnapshots.clear();
-    conflictSnapshots.clear();
+    writeProtocol.clear();
     storeDemoMode(true);
   },
   rememberFilesystem: async () => {
@@ -149,8 +131,7 @@ const platform: NavigatorPlatform = {
   },
   forgetSource: async () => {
     await clearDesktopRoot();
-    writeSnapshots.clear();
-    conflictSnapshots.clear();
+    writeProtocol.clear();
     storeDemoMode(false);
   },
 };
