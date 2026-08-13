@@ -230,7 +230,6 @@ async function renderDirectory(
   route: RouteIntent = "push",
 ): Promise<void> {
   if (lifecycle.signal.aborted) return;
-  syncRoute(route);
   renderChrome();
   const generation = (renderGeneration += 1);
   const current = currentDirectory();
@@ -255,6 +254,12 @@ async function renderDirectory(
   }
 
   if (lifecycle.signal.aborted) return;
+
+  // Deferred past every guard above: a render that gets superseded while its peeks are
+  // in flight must never write a history entry for a directory it did not end up
+  // drawing. adoptArea already wrote its own entry for whatever the camera actually
+  // settled on, so an abandoned render reaching this line would otherwise double it.
+  syncRoute(route);
 
   try {
     world.setDirectory(current, children, direction);
