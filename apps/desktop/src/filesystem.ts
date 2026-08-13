@@ -33,6 +33,13 @@ type PickedRoot = {
 
 const nativeCapabilities = new Map<string, { canEditText: boolean; canOpenNative: boolean }>();
 
+/**
+ * Two callers racing the same directory must share one read, or the loser's node graph
+ * leaks into navigation state while the winner's result is the one actually stored.
+ */
+const childrenInFlight = new Map<string, Promise<FsNode[]>>();
+const peekInFlight = new Map<string, Promise<DirectoryPeek>>();
+
 export type DesktopFileSnapshot = {
   size: number;
   modified?: number;
@@ -91,27 +98,37 @@ export async function ensureChildren(parent: FsNode): Promise<FsNode[]> {
   const path = desktopDirectoryPath(parent);
   if (!path) return [];
 
-  const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
-  const children: FsNode[] = entries.map((entry) => {
-    const isDirectory = entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle;
-    const node: FsNode = {
-      id: entry.path,
-      parentId: parent.id,
-      name: entry.name,
-      kind: isDirectory ? "directory" : "file",
-      size: entry.isFile ? entry.size : undefined,
-      modified: entry.modified ?? undefined,
-      resource: { id: entry.path, readable: entry.isFile && !entry.isSymlink && entry.readable },
-    };
-    nativeCapabilities.set(entry.path, {
-      canEditText: entry.canEditText,
-      canOpenNative: entry.canOpenNative,
+  const inFlight = childrenInFlight.get(parent.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
+    const children: FsNode[] = entries.map((entry) => {
+      const isDirectory = entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle;
+      const node: FsNode = {
+        id: entry.path,
+        parentId: parent.id,
+        name: entry.name,
+        kind: isDirectory ? "directory" : "file",
+        size: entry.isFile ? entry.size : undefined,
+        modified: entry.modified ?? undefined,
+        resource: { id: entry.path, readable: entry.isFile && !entry.isSymlink && entry.readable },
+      };
+      nativeCapabilities.set(entry.path, {
+        canEditText: entry.canEditText,
+        canOpenNative: entry.canOpenNative,
+      });
+      return node;
     });
-    return node;
-  });
 
-  parent.children = sortNodes(children);
-  return parent.children;
+    parent.children = sortNodes(children);
+    return parent.children;
+  })();
+  childrenInFlight.set(parent.id, read);
+  try {
+    return await read;
+  } finally {
+    childrenInFlight.delete(parent.id);
+  }
 }
 
 export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
@@ -127,23 +144,34 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
 
   const path = desktopDirectoryPath(node);
   if (!path) return { total: 0, categories: [] };
+
+  const inFlight = peekInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    try {
+      const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
+      node.peek = {
+        total: entries.length,
+        categories: entries.slice(0, DIRECTORY_PEEK_LIMIT).map((entry) =>
+          categoryOf({
+            id: entry.path,
+            parentId: node.id,
+            name: entry.name,
+            kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
+          }),
+        ),
+      };
+    } catch {
+      node.peek = { total: 0, categories: [] };
+    }
+    return node.peek;
+  })();
+  peekInFlight.set(node.id, read);
   try {
-    const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
-    node.peek = {
-      total: entries.length,
-      categories: entries.slice(0, DIRECTORY_PEEK_LIMIT).map((entry) =>
-        categoryOf({
-          id: entry.path,
-          parentId: node.id,
-          name: entry.name,
-          kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
-        }),
-      ),
-    };
-  } catch {
-    node.peek = { total: 0, categories: [] };
+    return await read;
+  } finally {
+    peekInFlight.delete(node.id);
   }
-  return node.peek;
 }
 
 export async function readDesktopResource(

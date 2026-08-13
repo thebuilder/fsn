@@ -25,6 +25,13 @@ type BrowserResource =
 const browserResources = new Map<string, BrowserResource>();
 let sourceSequence = 0;
 
+/**
+ * Two callers racing the same directory must share one read, or the loser's node graph
+ * leaks into navigation state while the winner's result is the one actually stored.
+ */
+const childrenInFlight = new Map<string, Promise<FsNode[]>>();
+const peekInFlight = new Map<string, Promise<DirectoryPeek>>();
+
 function sourceId(prefix: "local" | "import", name: string): string {
   sourceSequence += 1;
   return `${prefix}:${sourceSequence}:${encodeURIComponent(name)}`;
@@ -114,8 +121,18 @@ export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle)
 export async function ensureChildren(node: FsNode): Promise<FsNode[]> {
   if (node.children) return node.children;
   if (node.kind !== "directory" || !directoryHandleFor(node)) return [];
-  node.children = await readHandleChildren(node);
-  return node.children;
+  const inFlight = childrenInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    node.children = await readHandleChildren(node);
+    return node.children;
+  })();
+  childrenInFlight.set(node.id, read);
+  try {
+    return await read;
+  } finally {
+    childrenInFlight.delete(node.id);
+  }
 }
 
 /**
@@ -138,23 +155,33 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
     return node.peek;
   }
 
-  const peek: DirectoryPeek = { total: 0, categories: [] };
-  const handle = directoryHandleFor(node);
-  if (handle) {
-    try {
-      const directory = handle as DirectoryHandleWithEntries;
-      for await (const [name, childHandle] of directory.entries()) {
-        peek.total += 1;
-        if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
-          peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
+  const inFlight = peekInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    const peek: DirectoryPeek = { total: 0, categories: [] };
+    const handle = directoryHandleFor(node);
+    if (handle) {
+      try {
+        const directory = handle as DirectoryHandleWithEntries;
+        for await (const [name, childHandle] of directory.entries()) {
+          peek.total += 1;
+          if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
+            peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
+          }
         }
+      } catch {
+        // A directory we are not allowed to list simply previews as empty land.
       }
-    } catch {
-      // A directory we are not allowed to list simply previews as empty land.
     }
+    node.peek = peek;
+    return peek;
+  })();
+  peekInFlight.set(node.id, read);
+  try {
+    return await read;
+  } finally {
+    peekInFlight.delete(node.id);
   }
-  node.peek = peek;
-  return peek;
 }
 
 /** Resolves file metadata a pool at a time: one slow handle stalls its slot, not the directory. */

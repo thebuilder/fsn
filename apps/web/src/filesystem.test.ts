@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rootFromDirectoryHandle, rootFromFileList } from "./filesystem";
+import { ensureChildren, peekChildren, rootFromDirectoryHandle, rootFromFileList } from "./filesystem";
 
 describe("browser filesystem adapter", () => {
   it("returns no snapshot for an empty selection", () => {
@@ -21,6 +21,15 @@ describe("browser filesystem adapter", () => {
     expect(snapshot?.sourceLabel).toContain("LOCAL SNAPSHOT");
   });
 });
+
+/** A promise plus the resolver to release it later, for gating fake async work in tests. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 type FakeFileEntry = {
   kind: "file";
@@ -54,6 +63,54 @@ function fakeDirectory(
     },
   };
 }
+
+describe("browser filesystem adapter: in-flight dedup", () => {
+  it("shares one in-flight read when two callers call ensureChildren for the same directory concurrently", async () => {
+    const gate = deferred<void>();
+    let entriesCalls = 0;
+    const subDir = fakeDirectory("sub", [], {
+      gate: gate.promise,
+      onEntries: () => {
+        entriesCalls += 1;
+      },
+    });
+    const rootDir = fakeDirectory("dedup-children-root", [["sub", subDir]]);
+    const snapshot = await rootFromDirectoryHandle(rootDir as unknown as FileSystemDirectoryHandle);
+    const subNode = snapshot.root.children?.find((node) => node.name === "sub");
+    expect(subNode).toBeDefined();
+
+    const first = ensureChildren(subNode!);
+    const second = ensureChildren(subNode!);
+    gate.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(secondResult);
+    expect(entriesCalls).toBe(1);
+  });
+
+  it("shares one in-flight read when two callers call peekChildren for the same directory concurrently", async () => {
+    const gate = deferred<void>();
+    let entriesCalls = 0;
+    const subDir = fakeDirectory("sub", [], {
+      gate: gate.promise,
+      onEntries: () => {
+        entriesCalls += 1;
+      },
+    });
+    const rootDir = fakeDirectory("dedup-peek-root", [["sub", subDir]]);
+    const snapshot = await rootFromDirectoryHandle(rootDir as unknown as FileSystemDirectoryHandle);
+    const subNode = snapshot.root.children?.find((node) => node.name === "sub");
+    expect(subNode).toBeDefined();
+
+    const first = peekChildren(subNode!);
+    const second = peekChildren(subNode!);
+    gate.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(secondResult);
+    expect(entriesCalls).toBe(1);
+  });
+});
 
 describe("browser filesystem adapter: metadata pool", () => {
   it("batches metadata for every file through the pool, regardless of completion order", async () => {
