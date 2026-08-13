@@ -37,6 +37,7 @@ pub enum WriteTextResult {
 pub struct ReadTextResult {
     pub bytes: Vec<u8>,
     pub snapshot: FileSnapshot,
+    pub is_utf8: bool,
 }
 
 pub fn read_text(mut file: File) -> Result<ReadTextResult, String> {
@@ -52,8 +53,9 @@ pub fn read_text(mut file: File) -> Result<ReadTextResult, String> {
     if bytes.len() > MAX_TEXT_BYTES {
         return Err(limit_error());
     }
-    std::str::from_utf8(&bytes)
-        .map_err(|_| "Editable files must contain valid UTF-8 text".to_string())?;
+    // Strict UTF-8 is only required to arm a destructive save; a read should
+    // still show legacy/malformed text rather than fail outright.
+    let is_utf8 = std::str::from_utf8(&bytes).is_ok();
     let displayed = snapshot_from_bytes(&metadata, &file, &bytes)?;
     let current = snapshot_file(&mut file)?;
     if displayed != current {
@@ -62,6 +64,7 @@ pub fn read_text(mut file: File) -> Result<ReadTextResult, String> {
     Ok(ReadTextResult {
         bytes,
         snapshot: displayed,
+        is_utf8,
     })
 }
 
@@ -350,10 +353,22 @@ mod tests {
     }
 
     #[test]
-    fn text_read_rejects_invalid_utf8() {
+    fn text_read_flags_invalid_utf8() {
         let (path, dir) = fixture("invalid", &[0xff, 0xfe]);
         let file = dir.open("notes.txt").unwrap().into_std();
-        assert!(read_text(file).is_err());
+        let result = read_text(file).unwrap();
+        assert!(!result.is_utf8);
+        assert_eq!(result.bytes, vec![0xff, 0xfe]);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn text_read_flags_valid_utf8() {
+        let (path, dir) = fixture("valid", b"hello world");
+        let file = dir.open("notes.txt").unwrap().into_std();
+        let result = read_text(file).unwrap();
+        assert!(result.is_utf8);
+        assert_eq!(result.bytes, b"hello world");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

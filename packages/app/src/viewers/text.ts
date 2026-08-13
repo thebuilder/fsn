@@ -1,6 +1,6 @@
 import { formatBytes } from "@fsn/core";
 import { el } from "./dom";
-import { decodeTextDocument, serializeTextDocument } from "./text-codec";
+import { decodeTextDocument, isStrictUtf8, serializeTextDocument } from "./text-codec";
 import type { Action, ViewerHost } from "./types";
 
 const MAX_TEXT_BYTES = 2_000_000;
@@ -31,14 +31,22 @@ export async function render(host: ViewerHost): Promise<void> {
     // where silently replacing bytes would make a save destructive.
     const value = await source.text();
     if (host.signal.aborted) return;
-    host.setMode("SIMPLETEXT / READ ONLY");
-    host.mount(textDocument(value));
-    host.setStatus(describeText(value));
+    renderReadOnly(host, value);
     return;
   }
 
-  const document = decodeTextDocument(new Uint8Array(await source.arrayBuffer()));
+  const bytes = new Uint8Array(await source.arrayBuffer());
   if (host.signal.aborted) return;
+  if (!isStrictUtf8(bytes)) {
+    // The platform may only learn the encoding at read time (e.g. a native read
+    // that tolerated non-UTF-8 bytes rather than failing), so the viewer re-checks
+    // here and falls back to the same read-only presentation used above.
+    const value = new TextDecoder("utf-8").decode(bytes);
+    renderReadOnly(host, value);
+    return;
+  }
+
+  const document = decodeTextDocument(bytes);
   const value = document.value;
 
   host.setMode("SIMPLETEXT / EDITABLE UTF-8");
@@ -90,6 +98,13 @@ export async function render(host: ViewerHost): Promise<void> {
   host.mount(editor.root);
   paintState();
   editor.input.focus({ preventScroll: true });
+}
+
+/** Shared presentation for text that will not be re-serialized: plain view, no save action. */
+function renderReadOnly(host: ViewerHost, value: string): void {
+  host.setMode("SIMPLETEXT / READ ONLY");
+  host.mount(textDocument(value));
+  host.setStatus(describeText(value));
 }
 
 function editableTextDocument(value: string, name: string): { root: HTMLElement; input: HTMLTextAreaElement } {

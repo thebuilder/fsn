@@ -70,6 +70,7 @@ type NativeFileSnapshot = Omit<DesktopFileSnapshot, "modified" | "modifiedNs"> &
 type NativeTextReadResult = {
   bytes: ArrayBuffer | number[];
   snapshot: NativeFileSnapshot;
+  isUtf8: boolean;
 };
 
 /** Opens a native folder picker and atomically replaces the active Rust grant. */
@@ -188,12 +189,29 @@ export async function readDesktopResource(
           maxBytes: MAX_BROWSER_READ_BYTES,
         }),
         snapshot: undefined,
+        isUtf8: true,
       };
   signal?.throwIfAborted();
   const payload = loaded.bytes instanceof ArrayBuffer
     ? new Uint8Array(loaded.bytes)
     : Uint8Array.from(loaded.bytes);
   node.size = payload.byteLength;
+  if (loaded.snapshot && !loaded.isUtf8) {
+    // A snapshot arms the write path's atomic-save flow. Bytes the editor cannot
+    // faithfully round-trip through UTF-8 must never carry a snapshot forward, or a
+    // later save could silently corrupt the file's non-UTF-8 content.
+    if (node.resource) {
+      const existing = nativeCapabilities.get(node.resource.id);
+      nativeCapabilities.set(node.resource.id, {
+        canEditText: false,
+        canOpenNative: existing?.canOpenNative ?? false,
+      });
+    }
+    return {
+      blob: new Blob([payload], { type: mimeTypeFor(node.name) }),
+      snapshot: undefined,
+    };
+  }
   return {
     blob: new Blob([payload], { type: mimeTypeFor(node.name) }),
     snapshot: loaded.snapshot ? normalizeSnapshot(loaded.snapshot) : undefined,
