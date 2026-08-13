@@ -253,7 +253,15 @@ async function renderDirectory(
 
   if (lifecycle.signal.aborted) return;
 
-  world.setDirectory(current, children, direction);
+  try {
+    world.setDirectory(current, children, direction);
+  } catch (error) {
+    // The chrome (breadcrumbs, address) has already committed to this directory; absorb
+    // a layout failure here so the app keeps working instead of leaving the 3D world
+    // silently stuck on whatever it drew last.
+    setStatus(`The world could not draw ${current.name}: ${error instanceof Error ? error.message : "unknown failure"}`, true);
+    return;
+  }
   if (announce) setStatus(`${current.name} mounted · ${children.length} objects`);
 }
 
