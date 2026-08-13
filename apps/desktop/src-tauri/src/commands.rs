@@ -137,6 +137,14 @@ pub async fn write_text_atomic(
     .map_err(|_| "The text write did not complete".to_string())?
 }
 
+/// What `authorize_native_open` validated, captured so `verify_target_unchanged` can confirm
+/// nothing was swapped out between authorization and launch.
+struct OpenTarget {
+    is_bundle: bool,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
 #[tauri::command]
 pub fn open_native(
     app: tauri::AppHandle,
@@ -144,22 +152,28 @@ pub fn open_native(
     path: PathBuf,
 ) -> Result<(), String> {
     root.access(&path, |dir, relative| {
-        authorize_native_open(dir, relative, &path)
-    })?;
-    let path = path
-        .into_os_string()
-        .into_string()
-        .map_err(|_| "The selected file path is not valid UTF-8".to_string())?;
-    app.opener()
-        .open_path(path, None::<String>)
-        .map_err(|_| "Could not open the file in its native application".to_string())
+        let target = authorize_native_open(dir, relative, &path)?;
+        verify_target_unchanged(dir, relative, &target)?;
+        // Best-effort by construction: the opener API takes a path string, not a file
+        // descriptor, so the OS still re-resolves `path` itself when it launches the native
+        // application. This re-check narrows the TOCTOU window as far as this process can;
+        // it cannot close it entirely without an fd-passing opener API.
+        let path_string = path
+            .clone()
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "The selected file path is not valid UTF-8".to_string())?;
+        app.opener()
+            .open_path(path_string, None::<String>)
+            .map_err(|_| "Could not open the file in its native application".to_string())
+    })
 }
 
 fn authorize_native_open(
     dir: &cap_std::fs::Dir,
     relative: &Path,
     display_path: &Path,
-) -> Result<(), String> {
+) -> Result<OpenTarget, String> {
     let metadata = dir
         .symlink_metadata(relative)
         .map_err(|_| "The selected object is unavailable".to_string())?;
@@ -167,10 +181,22 @@ fn authorize_native_open(
         return Err("Symbolic links cannot be opened from FSN".into());
     }
     if metadata.is_dir() && file_policy::can_open_bundle(display_path) {
-        return dir
+        let opened = dir
             .open_dir(relative)
-            .map(|_| ())
-            .map_err(|_| "This application bundle cannot be opened".to_string());
+            .map_err(|_| "This application bundle cannot be opened".to_string())?;
+        #[cfg(unix)]
+        let identity = {
+            use cap_std::fs::MetadataExt;
+            let metadata = opened
+                .dir_metadata()
+                .map_err(|_| "This application bundle cannot be inspected".to_string())?;
+            (metadata.dev(), metadata.ino())
+        };
+        return Ok(OpenTarget {
+            is_bundle: true,
+            #[cfg(unix)]
+            identity,
+        });
     }
     if metadata.is_file() {
         let file = dir
@@ -178,10 +204,53 @@ fn authorize_native_open(
             .map(cap_std::fs::File::into_std)
             .map_err(|_| "This file cannot be opened".to_string())?;
         if file_policy::can_open_native(display_path, is_executable(&file)?) {
-            return Ok(());
+            #[cfg(unix)]
+            let identity = {
+                use std::os::unix::fs::MetadataExt;
+                let metadata = file
+                    .metadata()
+                    .map_err(|_| "This file cannot be inspected".to_string())?;
+                (metadata.dev(), metadata.ino())
+            };
+            return Ok(OpenTarget {
+                is_bundle: false,
+                #[cfg(unix)]
+                identity,
+            });
         }
     }
     Err("Executable and system files cannot be opened from FSN".into())
+}
+
+/// Re-checks, immediately before launch and still under the grant's lock, that `relative`
+/// still refers to the same object that `authorize_native_open` validated: it must still not
+/// be a symlink and its file/directory type must not have changed. On unix, its `(dev, ino)`
+/// identity must also still match, closing the window where the name is swapped for a
+/// different object between authorization and launch. Non-unix platforms have no stable inode
+/// API available without an extra dependency (e.g. `same-file`), so only the type/symlink
+/// re-check runs there; see the maintenance note in the plan this hardening came from.
+fn verify_target_unchanged(
+    dir: &cap_std::fs::Dir,
+    relative: &Path,
+    target: &OpenTarget,
+) -> Result<(), String> {
+    let metadata = dir
+        .symlink_metadata(relative)
+        .map_err(|_| "The selected object is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Symbolic links cannot be opened from FSN".into());
+    }
+    if metadata.is_dir() != target.is_bundle {
+        return Err("The selected object changed before it could be opened".into());
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::MetadataExt;
+        if (metadata.dev(), metadata.ino()) != target.identity {
+            return Err("The selected object changed before it could be opened".into());
+        }
+    }
+    Ok(())
 }
 
 fn read_directory(dir: &cap_std::fs::Dir, display: &Path) -> Result<Vec<NativeEntry>, String> {
@@ -340,6 +409,18 @@ mod tests {
     use super::*;
     use cap_std::ambient_authority;
 
+    fn fixture(name: &str, contents: &[u8]) -> (std::path::PathBuf, cap_std::fs::Dir) {
+        let path = std::env::temp_dir().join(format!(
+            "fsn-native-open-{name}-{}-{}",
+            std::process::id(),
+            UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("notes.txt"), contents).unwrap();
+        let dir = cap_std::fs::Dir::open_ambient_dir(&path, ambient_authority()).unwrap();
+        (path, dir)
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn native_open_accepts_app_bundles_but_not_arbitrary_directories() {
@@ -361,5 +442,33 @@ mod tests {
         );
 
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn regular_file_authorizes_and_reverifies_successfully() {
+        let (path, dir) = fixture("reverify", b"hello");
+        let target =
+            authorize_native_open(&dir, Path::new("notes.txt"), &path.join("notes.txt")).unwrap();
+        assert!(verify_target_unchanged(&dir, Path::new("notes.txt"), &target).is_ok());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_target_unchanged_refuses_after_swap_to_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let (path, dir) = fixture("swap", b"hello");
+        let target =
+            authorize_native_open(&dir, Path::new("notes.txt"), &path.join("notes.txt")).unwrap();
+
+        // Simulate a TOCTOU swap: replace the authorized regular file with a symlink to
+        // something else, using the same name.
+        std::fs::remove_file(path.join("notes.txt")).unwrap();
+        std::fs::write(path.join("elsewhere"), b"different").unwrap();
+        symlink(path.join("elsewhere"), path.join("notes.txt")).unwrap();
+
+        assert!(verify_target_unchanged(&dir, Path::new("notes.txt"), &target).is_err());
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
