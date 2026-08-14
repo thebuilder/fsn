@@ -28,7 +28,8 @@ export type ViewerElements = {
   zoom: HTMLButtonElement;
   collapse: HTMLButtonElement;
   grow: HTMLButtonElement;
-  close: HTMLButtonElement;
+  /** Every control that closes the window: the title bar light, and the X on its far edge. */
+  close: readonly HTMLButtonElement[];
 };
 
 /** Host-owned file operations keep the shared viewer independent from its runtime. */
@@ -91,9 +92,11 @@ export class FileViewer {
     private readonly io: ViewerIO,
   ) {
     const listener = { signal: this.lifecycle.signal };
-    elements.close.addEventListener("click", () => {
-      if (this.canDiscard()) elements.dialog.close();
-    }, listener);
+    for (const button of elements.close) {
+      button.addEventListener("click", () => {
+        if (this.canDiscard()) elements.dialog.close();
+      }, listener);
+    }
     elements.dialog.addEventListener("cancel", (event) => {
       if (!this.canDiscard()) event.preventDefault();
     }, listener);
