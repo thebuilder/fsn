@@ -1,6 +1,16 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { categoryOf, type FileCategory, type FsNode } from "@fsn/core";
+import {
+  buildLayout,
+  GROUND_HEIGHT,
+  GROUND_TOP,
+  GROUND_Y,
+  seededHash,
+  type AreaLayout,
+  type Decor,
+  type Placement,
+} from "./layout";
 
 type SceneCallbacks = {
   onSelect: (node: FsNode | null) => void;
@@ -14,47 +24,7 @@ type SceneCallbacks = {
   onEnterArea: (directoryId: string) => void;
 };
 
-type Placement = {
-  node: FsNode;
-  position: THREE.Vector3;
-  scale: THREE.Vector3;
-  /** Box the selection and aim outlines wrap. Encloses a plot's markers, not just its slab. */
-  outlinePosition: THREE.Vector3;
-  outlineScale: THREE.Vector3;
-  /** Height at which a label clears this object and whatever stands on it. */
-  labelY: number;
-  /** How much of `labelY` is the row's lane stagger, so growth can stretch it. */
-  labelLift: number;
-  /** Milliseconds into the reveal before this object starts to rise. */
-  introDelay: number;
-  /** Set once the instanced mesh exists, so hover can address this one instance. */
-  mesh?: THREE.InstancedMesh;
-  instanceIndex?: number;
-  /** Preview markers standing on a directory plot. Never picked; they ride with it. */
-  decor: Decor[];
-  /** Built on demand the first time this object is close enough on screen to name. */
-  label?: THREE.Sprite;
-};
-
-/** One preview marker on a directory plot. Decoration only: not selectable, not a node. */
-type Decor = {
-  category: FileCategory;
-  position: THREE.Vector3;
-  scale: THREE.Vector3;
-  mesh?: THREE.InstancedMesh;
-  instanceIndex?: number;
-};
-
 export type NavigationDirection = "initial" | "forward" | "backward";
-
-type AreaLayout = {
-  placements: Placement[];
-  radius: number;
-  groundWidth: number;
-  groundDepth: number;
-  /** Top of the tallest thing standing here, including its label. */
-  peakHeight: number;
-};
 
 type DirectoryArea = {
   id: string;
@@ -124,61 +94,10 @@ const GROUND_COLOR = 0x14262a;
 const RIM_COLOR = 0x0b171a;
 const PLOT_COLOR = 0x2c3a44;
 
-/** The district floor: one slab per directory, with everything inside standing on it. */
-const GROUND_HEIGHT = 0.5;
-const GROUND_Y = -0.12;
-const GROUND_TOP = GROUND_Y + GROUND_HEIGHT / 2;
-/** Bare floor around the outermost block, proportional so a small district is not a plinth. */
-const GROUND_MARGIN_RATIO = 0.16;
-const GROUND_MARGIN_MIN = 2.6;
-const GROUND_MARGIN_MAX = 6.5;
 const RIM_OVERHANG = 1.1;
 const RIM_HEIGHT = 0.22;
 const GRID_Y = GROUND_Y - GROUND_HEIGHT / 2 - RIM_HEIGHT - 0.04;
 const AREA_MARGIN = 22;
-
-/** Towers pack tight within a block; blocks are separated by a street. */
-/**
- * A little over one tower wide. Tighter than this and a block of same-coloured towers
- * fuses into a single mass from any angle low enough to see the skyline.
- */
-const TOWER_GAP = 1.7;
-const PLOT_GAP = 1.7;
-const BLOCK_AISLE = 3.8;
-
-/**
- * Every step through a block — back a row or along one — carries a label a lane higher,
- * so neither the neighbour behind nor the one beside prints at the same height. Stepping
- * back is what stops a label hiding behind the row in front. Stepping along used to be
- * unnecessary, because `TOWER_GAP` spaces towers further apart than a label is wide, but
- * only just: a label that grows to stay readable at distance eats that margin
- * immediately, and without a lane of its own each name in a row would take the space of
- * the one beside it.
- *
- * The lane cycles rather than climbing. Only immediate neighbours can overlap on screen
- * — anything further is already separated by perspective — so a few distinct heights is
- * all it takes. Left to accumulate, a directory deep enough to need ten rows would leave
- * its back labels floating ten units over their towers, attached to nothing. Three lanes
- * cannot also separate both diagonals; those are the widest-spaced neighbours of the
- * eight, and the picker turns down whichever pair still meets on screen.
- */
-const LABEL_LANE = 1;
-const LABEL_LANE_CYCLE = 3;
-
-/** A directory is a low plot of land carrying one marker per child. */
-const PLOT_HEIGHT = 0.62;
-const PLOT_TOP = GROUND_TOP + PLOT_HEIGHT;
-const PLOT_PADDING = 1.05;
-const PLOT_MIN_WIDTH = 4.2;
-const MARKER_CELL = 1;
-const MARKER_FOOTPRINT = 0.6;
-const MARKER_HEIGHT = 1.15;
-const MARKER_MAX_COLUMNS = 6;
-
-/** Blocks are laid out in this order, so a directory's shape is stable across visits. */
-const CATEGORY_ORDER: FileCategory[] = [
-  "directory", "code", "document", "image", "audio", "video", "model", "font", "archive", "system", "unknown",
-];
 
 /**
  * Labels are the first thing to clutter a tight layout, so only the nearest few on
@@ -241,7 +160,6 @@ const DOUBLE_TAP_RADIUS = 36;
 
 /** Reveal: each object rises over INTRO_RISE, staggered outwards across INTRO_STAGGER. */
 const INTRO_RISE = 420;
-const INTRO_STAGGER = 460;
 const INTRO_LABEL_FADE = 240;
 /** How far ahead of its height an object's footprint opens: 4 means by the first quarter. */
 const INTRO_SPREAD_LEAD = 4;
@@ -272,215 +190,6 @@ const AREA_DWELL = 400;
 const HOVER_TINT = new THREE.Color(1.6, 1.6, 1.6);
 const NEUTRAL_TINT = new THREE.Color(1, 1, 1);
 const NO_ROTATION = new THREE.Quaternion();
-
-function seededHash(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash >>> 0);
-}
-
-type Footprint = { width: number; depth: number };
-type Marker = { category: FileCategory; x: number; z: number };
-type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
-/** `lane` counts steps back and along from the front left of the pack, for label stacking. */
-type Placed<T> = { item: T; x: number; z: number; lane: number };
-
-/** Comparator that restores the order items arrived in, captured before any sorting. */
-function byListing(boxes: Box[]): (a: Box, b: Box) => number {
-  const rank = new Map(boxes.map((box, index) => [box.node.id, index]));
-  return (a, b) => (rank.get(a.node.id) ?? 0) - (rank.get(b.node.id) ?? 0);
-}
-type PackResult<T> = { placed: Placed<T>[]; width: number; depth: number };
-
-/**
- * Flows items left to right into rows no wider than `limit`, then centres each row on
- * the origin. A row is only as deep as its own deepest item, so a block of towers stays
- * tight instead of inheriting the largest footprint in the directory.
- *
- * Items arrive sorted tallest first, which fills the rows back to front, and `orderInRow`
- * then restores the caller's reading order across each row. The result steps down towards
- * the camera — nothing tall stands in front of anything short — while each row still
- * reads left to right in listing order.
- */
-function shelfPack<T extends Footprint>(
-  items: T[],
-  gap: number,
-  limit: number,
-  orderInRow?: (a: T, b: T) => number,
-): PackResult<T> {
-  const rows: { items: T[]; width: number; depth: number }[] = [];
-  for (const item of items) {
-    let row = rows[rows.length - 1];
-    if (!row || row.width + gap + item.width > limit) {
-      row = { items: [], width: 0, depth: 0 };
-      rows.push(row);
-    }
-    if (row.items.length) row.width += gap;
-    row.items.push(item);
-    row.width += item.width;
-    row.depth = Math.max(row.depth, item.depth);
-  }
-
-  if (orderInRow) rows.forEach((row) => row.items.sort(orderInRow));
-
-  const width = Math.max(...rows.map((row) => row.width), 0);
-  const depth = rows.reduce((total, row) => total + row.depth, 0) + gap * Math.max(rows.length - 1, 0);
-  const placed: Placed<T>[] = [];
-  let z = -depth / 2;
-  rows.forEach((row, index) => {
-    let x = -row.width / 2;
-    row.items.forEach((item, column) => {
-      // Along the row as well as back through them: see `LABEL_LANE`.
-      const lane = rows.length - 1 - index + column;
-      placed.push({ item, x: x + item.width / 2, z: z + row.depth / 2, lane });
-      x += item.width + gap;
-    });
-    z += row.depth + gap;
-  });
-  return { placed, width, depth };
-}
-
-/** A row width that lands the pack near `aspect`:1 rather than one long corridor. */
-function packWidth(items: Footprint[], gap: number, aspect: number): number {
-  const area = items.reduce((total, item) => total + (item.width + gap) * (item.depth + gap), 0);
-  return Math.max(Math.max(...items.map((item) => item.width), 1), Math.sqrt(area * aspect));
-}
-
-/** A file is a tower: footprint roughly constant, height from its size on disk. */
-function towerBox(node: FsNode): Box {
-  const jitter = seededHash(node.id);
-  return {
-    node,
-    width: 1.45 + (jitter % 4) * 0.1,
-    depth: 1.45,
-    height: Math.max(0.55, Math.min(7, Math.log2((node.size ?? 1_024) / 1024 + 1) * 0.62)),
-    markers: [],
-  };
-}
-
-/**
- * A directory is a plot of land: its area grows with how much it holds, and it carries
- * one marker per child, coloured by that child's type. The markers are all the same
- * height on purpose — sizes inside a directory are not known without opening every file
- * in it, and a varied skyline would be encoding data that was never read.
- */
-function plotBox(node: FsNode): Box {
-  const peek = node.peek;
-  const total = peek?.total ?? node.children?.length ?? 0;
-  const columns = THREE.MathUtils.clamp(Math.round(Math.sqrt(total)), 1, MARKER_MAX_COLUMNS);
-  const rows = THREE.MathUtils.clamp(Math.ceil(total / columns), 1, MARKER_MAX_COLUMNS);
-  const shown = Math.min(total, columns * rows);
-
-  const markers: Marker[] = [];
-  for (let index = 0; index < shown; index += 1) {
-    markers.push({
-      category: peek?.categories[index] ?? "unknown",
-      x: ((index % columns) - (columns - 1) / 2) * MARKER_CELL,
-      z: (Math.floor(index / columns) - (rows - 1) / 2) * MARKER_CELL,
-    });
-  }
-
-  return {
-    node,
-    width: Math.max(PLOT_MIN_WIDTH, columns * MARKER_CELL + PLOT_PADDING * 2),
-    depth: Math.max(PLOT_MIN_WIDTH * 0.8, rows * MARKER_CELL + PLOT_PADDING * 2),
-    height: PLOT_HEIGHT,
-    markers,
-  };
-}
-
-function toPlacement(box: Box, x: number, z: number, labelLift: number): Placement {
-  const decor = box.markers.map((marker) => ({
-    category: marker.category,
-    position: new THREE.Vector3(x + marker.x, PLOT_TOP + MARKER_HEIGHT / 2, z + marker.z),
-    scale: new THREE.Vector3(MARKER_FOOTPRINT, MARKER_HEIGHT, MARKER_FOOTPRINT),
-  }));
-  const outlineHeight = box.markers.length ? PLOT_HEIGHT + MARKER_HEIGHT : box.height;
-  return {
-    node: box.node,
-    position: new THREE.Vector3(x, GROUND_TOP + box.height / 2, z),
-    scale: new THREE.Vector3(box.width, box.height, box.depth),
-    outlinePosition: new THREE.Vector3(x, GROUND_TOP + outlineHeight / 2, z),
-    outlineScale: new THREE.Vector3(box.width, outlineHeight, box.depth),
-    labelY: labelLift + (box.markers.length ? PLOT_TOP + MARKER_HEIGHT + 0.95 : GROUND_TOP + box.height + 0.82),
-    labelLift,
-    introDelay: 0,
-    decor,
-  };
-}
-
-/**
- * Lays a directory out as a city block plan on one shared floor. Objects of the same
- * category are packed together into a block and the blocks are flowed across the
- * district with streets between them, so the palette reads as neighbourhoods rather
- * than as scattered confetti — and so a plot's size is the only thing on screen that
- * varies with what a directory actually holds.
- */
-function buildLayout(nodes: FsNode[]): AreaLayout {
-  if (!nodes.length) return { placements: [], radius: 16, groundWidth: 22, groundDepth: 18, peakHeight: 2 };
-
-  const byCategory = new Map<FileCategory, FsNode[]>();
-  for (const node of nodes) {
-    const category = categoryOf(node);
-    const bucket = byCategory.get(category);
-    if (bucket) bucket.push(node);
-    else byCategory.set(category, [node]);
-  }
-
-  const blocks = CATEGORY_ORDER.flatMap((category, categoryRank) => {
-    const members = byCategory.get(category);
-    if (!members) return [];
-    const isDirectory = category === "directory";
-    const boxes = members.map((node) => (isDirectory ? plotBox(node) : towerBox(node)));
-    const gap = isDirectory ? PLOT_GAP : TOWER_GAP;
-    // Tallest to the back, then alphabetical across each row. Plots are all the same
-    // low height, so for those the height sort is a no-op and listing order stands.
-    const rowOrder = byListing(boxes);
-    boxes.sort((a, b) => b.height - a.height);
-    const packed = shelfPack(boxes, gap, packWidth(boxes, gap, 1.5), rowOrder);
-    return [{
-      packed,
-      width: packed.width,
-      depth: packed.depth,
-      categoryRank,
-      peak: Math.max(...boxes.map((box) => box.height)),
-    }];
-  });
-
-  // The same rule one level up: a block of tall towers goes behind the short ones so it
-  // cannot wall off the district, while each row still runs in category order.
-  const blockOrder = (a: typeof blocks[number], b: typeof blocks[number]) => a.categoryRank - b.categoryRank;
-  blocks.sort((a, b) => b.peak - a.peak);
-  const district = shelfPack(blocks, BLOCK_AISLE, packWidth(blocks, BLOCK_AISLE, 1.7), blockOrder);
-  const placements = district.placed.flatMap(({ item: block, x: blockX, z: blockZ, lane: blockLane }) =>
-    block.packed.placed.map(({ item: box, x, z, lane }) =>
-      toPlacement(box, blockX + x, blockZ + z, ((blockLane + lane) % LABEL_LANE_CYCLE) * LABEL_LANE)));
-
-  // Ripple the reveal outwards from the centre, capped so a huge directory
-  // takes no longer to land than a small one.
-  const furthest = Math.max(...placements.map((p) => Math.hypot(p.position.x, p.position.z)), 1);
-  placements.forEach((placement) => {
-    placement.introDelay = (Math.hypot(placement.position.x, placement.position.z) / furthest) * INTRO_STAGGER;
-  });
-
-  const margin = THREE.MathUtils.clamp(
-    Math.max(district.width, district.depth) * GROUND_MARGIN_RATIO,
-    GROUND_MARGIN_MIN,
-    GROUND_MARGIN_MAX,
-  );
-  const groundWidth = district.width + margin * 2;
-  const groundDepth = district.depth + margin * 2;
-  return {
-    placements,
-    radius: Math.hypot(groundWidth, groundDepth) / 2 + 6,
-    groundWidth,
-    groundDepth,
-    peakHeight: Math.max(...placements.map((p) => p.labelY), 0),
-  };
-}
 
 function makeLabel(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -622,6 +331,14 @@ export class WorldScene {
   private readonly pickMeshes = new Map<THREE.InstancedMesh, Placement[]>();
   private readonly selectionBox: THREE.LineSegments;
   private readonly aimBox: THREE.LineSegments;
+  /** Shared by selectionBox and aimBox; EdgesGeometry copies what it needs from unitBox. */
+  private readonly outlineGeometry: THREE.EdgesGeometry;
+  private readonly selectionMaterial: THREE.LineBasicMaterial;
+  private readonly aimMaterial: THREE.LineBasicMaterial;
+  /** Every per-area mesh shares this unit cube, scaled per instance; disposeWorld must not free it. */
+  private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
+  /** One glow canvas per scene instance, reused by every area's beacon. */
+  private readonly glowTexture = createGlowTexture();
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -646,6 +363,14 @@ export class WorldScene {
   private revealHeld = false;
   private hovered: FsNode | null = null;
   private aimed: Placement | null = null;
+  private selected: Placement | null = null;
+  /**
+   * The world position an area held the instant it was surgically evicted, kept just
+   * long enough for the area that replaces it to claim the same spot. Consumed once:
+   * `setDirectory` reads and clears it, so a directory opened fresh later never
+   * inherits a stale center meant for a different visit.
+   */
+  private invalidatedCenter: { id: string; center: THREE.Vector3 } | null = null;
   private keyboardNavigationActive = false;
   private boosting = false;
   /** Alt held: the fly keys point the camera and the arrows drive it, each other's job. */
@@ -656,6 +381,11 @@ export class WorldScene {
   private pendingSince = 0;
   private hoverTarget: Placement | null = null;
   private hoverShown: Placement | null = null;
+  /** Latest pointermove position, resolved once per frame instead of once per event. */
+  private pointerClient: { x: number; y: number } | null = null;
+  private pointerDirty = false;
+  /** Only changes when layout does; the ResizeObserver clears it when that happens. */
+  private canvasRect: DOMRect | null = null;
   private hoverStrength = 0;
   private aimBoxOpacity = 0;
   private readonly scratchColor = new THREE.Color();
@@ -734,11 +464,13 @@ export class WorldScene {
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
 
-    const outlineGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-    this.selectionBox = new THREE.LineSegments(outlineGeometry, new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 }));
+    this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
+    this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
+    this.selectionBox = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
-    this.aimBox = new THREE.LineSegments(outlineGeometry, new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 }));
+    this.aimMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 });
+    this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
 
@@ -773,7 +505,11 @@ export class WorldScene {
     let isNew = false;
     if (!area) {
       const layout = buildLayout(nodes);
-      const center = direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius);
+      // A directory just surgically evicted by `invalidateArea` rebuilds exactly where
+      // it stood, not wherever `findAreaCenter` would otherwise place a fresh arrival.
+      const reclaimed = this.invalidatedCenter?.id === directory.id ? this.invalidatedCenter.center : null;
+      this.invalidatedCenter = null;
+      const center = reclaimed ?? (direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius));
       area = this.createArea(directory.id, center, layout);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
@@ -787,6 +523,50 @@ export class WorldScene {
     // one is navigation, and travels at the pace the person is already moving at.
     this.flyToArea(area, direction === "initial" ? "establish" : "travel");
     this.clearSelectionAndAim();
+  }
+
+  /**
+   * Surgically forgets one directory's built geometry, so the next `setDirectory` call
+   * for the same id reads as a fresh arrival and rebuilds it from scratch. Every other
+   * area in the world is untouched — this is the opposite of `disposeWorld`, which
+   * tears the whole scene down.
+   *
+   * The evicted area's center is banked in `invalidatedCenter` so the rebuild lands
+   * exactly where this one stood rather than being placed anew relative to whatever
+   * `findAreaCenter` would otherwise consider "current".
+   */
+  invalidateArea(directoryId: string): void {
+    const area = this.areas.get(directoryId);
+    if (!area) return;
+
+    area.pickMeshes.forEach((_placements, mesh) => this.pickMeshes.delete(mesh));
+    this.disposeAreaObjects(area.group);
+    this.worldGroup.remove(area.group);
+    this.areas.delete(directoryId);
+    this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
+
+    if (this.intro?.area === area) this.intro = null;
+    if (this.pendingArea === area) this.pendingArea = null;
+    if (this.currentArea === area) this.currentArea = null;
+    if (this.hoverTarget && area.placements.includes(this.hoverTarget)) this.hoverTarget = null;
+    if (this.hoverShown && area.placements.includes(this.hoverShown)) {
+      this.hoverShown = null;
+      this.hoverStrength = 0;
+    }
+    if (this.hovered && area.placements.some((placement) => placement.node.id === this.hovered?.id)) {
+      this.hovered = null;
+      this.callbacks.onHover(null, 0, 0);
+    }
+    if (this.aimed && area.placements.includes(this.aimed)) {
+      this.aimed = null;
+      this.aimBox.visible = false;
+      this.callbacks.onAim(null);
+    }
+    if (this.selected && area.placements.includes(this.selected)) {
+      this.selected = null;
+      this.selectionBox.visible = false;
+      this.callbacks.onSelect(null);
+    }
   }
 
   private createArea(id: string, center: THREE.Vector3, layout: AreaLayout): DirectoryArea {
@@ -807,7 +587,7 @@ export class WorldScene {
     const rimMaterial = new THREE.MeshLambertMaterial({ color: RIM_COLOR, emissive: RIM_COLOR, emissiveIntensity: 0.1 });
     rememberActiveLook(rimMaterial);
     materials.push(rimMaterial);
-    const rim = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), rimMaterial);
+    const rim = new THREE.Mesh(this.unitBox, rimMaterial);
     rim.scale.set(layout.groundWidth + RIM_OVERHANG * 2, RIM_HEIGHT, layout.groundDepth + RIM_OVERHANG * 2);
     rim.position.set(center.x, GROUND_Y - GROUND_HEIGHT / 2 - RIM_HEIGHT / 2, center.z);
     group.add(rim);
@@ -815,7 +595,7 @@ export class WorldScene {
     const groundMaterial = new THREE.MeshLambertMaterial({ color: GROUND_COLOR, emissive: GROUND_COLOR, emissiveIntensity: 0.16 });
     rememberActiveLook(groundMaterial);
     materials.push(groundMaterial);
-    const ground = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), groundMaterial);
+    const ground = new THREE.Mesh(this.unitBox, groundMaterial);
     ground.scale.set(layout.groundWidth, GROUND_HEIGHT, layout.groundDepth);
     ground.position.set(center.x, GROUND_Y, center.z);
     ground.receiveShadow = true;
@@ -824,7 +604,9 @@ export class WorldScene {
     const grouped = new Map<FileCategory, Placement[]>();
     placements.forEach((placement) => {
       const category = categoryOf(placement.node);
-      grouped.set(category, [...(grouped.get(category) ?? []), placement]);
+      const bucket = grouped.get(category);
+      if (bucket) bucket.push(placement);
+      else grouped.set(category, [placement]);
     });
 
     const pickMeshes = new Map<THREE.InstancedMesh, Placement[]>();
@@ -840,7 +622,7 @@ export class WorldScene {
       });
       rememberActiveLook(buildingMaterial);
       materials.push(buildingMaterial);
-      const buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), buildingMaterial, categoryPlacements.length);
+      const buildingMesh = new THREE.InstancedMesh(this.unitBox, buildingMaterial, categoryPlacements.length);
       buildingMesh.castShadow = true;
       buildingMesh.receiveShadow = true;
       categoryPlacements.forEach((placement, index) => {
@@ -879,7 +661,7 @@ export class WorldScene {
       });
       rememberActiveLook(markerMaterial);
       materials.push(markerMaterial);
-      const markerMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), markerMaterial, markers.length);
+      const markerMesh = new THREE.InstancedMesh(this.unitBox, markerMaterial, markers.length);
       markerMesh.castShadow = true;
       markers.forEach((decor, index) => {
         matrix.compose(decor.position, NO_ROTATION, decor.scale);
@@ -900,7 +682,7 @@ export class WorldScene {
 
     const beaconSize = Math.max(48, layout.radius * 2.4);
     const beacon = new THREE.Mesh(new THREE.PlaneGeometry(beaconSize, beaconSize), new THREE.MeshBasicMaterial({
-      map: createGlowTexture(),
+      map: this.glowTexture,
       color: 0x68ffda,
       transparent: true,
       opacity: 0.16,
@@ -1151,6 +933,7 @@ export class WorldScene {
 
   private clearSelectionAndAim(): void {
     this.selectionBox.visible = false;
+    this.selected = null;
     this.aimed = null;
     this.aimBox.visible = false;
     this.callbacks.onAim(null);
@@ -1503,20 +1286,34 @@ export class WorldScene {
     while (this.worldGroup.children.length) {
       const object = this.worldGroup.children.pop();
       if (!object) continue;
-      object.traverse((descendant) => {
-        if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
-        descendant.geometry?.dispose();
-        const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
-        materials.forEach((material) => {
-          if (material instanceof THREE.SpriteMaterial) material.map?.dispose();
-          material.dispose();
-        });
-      });
+      this.disposeAreaObjects(object);
     }
   }
 
+  /**
+   * Frees every mesh/line/sprite geometry and material under `object`, respecting the
+   * resources shared across every area: `unitBox` (every plot and marker instances it)
+   * and `glowTexture` (every area's beacon reuses the one canvas). Shared by
+   * `disposeWorld`, which tears down the whole scene, and `invalidateArea`, which frees
+   * a single area's group without touching any other.
+   */
+  private disposeAreaObjects(object: THREE.Object3D): void {
+    object.traverse((descendant) => {
+      if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
+      if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
+      const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
+      materials.forEach((material) => {
+        const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
+        if (map && map !== this.glowTexture) map.dispose();
+        material.dispose();
+      });
+    });
+  }
+
   private hitTest(clientX: number, clientY: number): Placement | null {
-    const rect = this.canvas.getBoundingClientRect();
+    // The rect only changes when layout does, and the ResizeObserver already fires then.
+    this.canvasRect ??= this.canvas.getBoundingClientRect();
+    const rect = this.canvasRect;
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
     return this.hitAtNdc(x, y);
@@ -1599,21 +1396,37 @@ export class WorldScene {
   }
 
   private selectPlacement(placement: Placement): void {
+    this.selected = placement;
     this.selectionBox.visible = true;
     this.selectionBox.position.copy(placement.outlinePosition);
     this.selectionBox.scale.copy(placement.outlineScale).multiplyScalar(1.06);
     this.callbacks.onSelect(placement.node);
   }
 
+  // Pointermove can arrive at up to ~120/s, well past the render rate; recording the
+  // latest position and resolving it once per frame (see `resolveHover`) makes hover
+  // cost one raycast per frame, like aim already does.
   private onPointerMove = (event: PointerEvent): void => {
-    const hit = this.hitTest(event.clientX, event.clientY);
+    this.pointerClient = { x: event.clientX, y: event.clientY };
+    this.pointerDirty = true;
+  };
+
+  /**
+   * Resolves the latest recorded pointermove into a hover state. Split out of
+   * `onPointerMove` so the per-event handler stays a cheap store, with the actual
+   * raycast paid for once per frame in `animate` instead of once per event.
+   */
+  private resolveHover(): void {
+    if (!this.pointerClient) return;
+    const { x, y } = this.pointerClient;
+    const hit = this.hitTest(x, y);
     if (hit?.node.id !== this.hovered?.id) {
       this.hovered = hit?.node ?? null;
       this.canvas.style.cursor = hit ? "crosshair" : "grab";
     }
     this.hoverTarget = hit;
-    this.callbacks.onHover(hit?.node ?? null, event.clientX, event.clientY);
-  };
+    this.callbacks.onHover(hit?.node ?? null, x, y);
+  }
 
   /**
    * Ends an establishing shot the moment the view is touched. Flights that did not offer
@@ -1654,6 +1467,10 @@ export class WorldScene {
     if (event.pointerType !== "mouse" && this.hoverTarget) {
       this.hovered = null;
       this.hoverTarget = null;
+      // Also drop the pending pointermove, or the next frame's resolveHover would
+      // resurrect the hover this finger-lift just cleared.
+      this.pointerClient = null;
+      this.pointerDirty = false;
       this.callbacks.onHover(null, event.clientX, event.clientY);
     }
     // Empty ground is what a selection is put down on. It is decided here rather than on
@@ -1757,6 +1574,9 @@ export class WorldScene {
   };
 
   private resize = (): void => {
+    // The cached rect in `hitTest` is only valid until layout changes; the
+    // ResizeObserver that calls `resize` is exactly the signal that it has.
+    this.canvasRect = null;
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     this.renderer.setSize(width, height, false);
@@ -1842,6 +1662,13 @@ export class WorldScene {
     if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
+    // Coalesces every pointermove since the last frame into one raycast, the way the
+    // 80 ms aim gate below already coalesces mousemove; the hover cross-fade hides the
+    // at-most-one-frame latency this adds.
+    if (this.pointerDirty && this.pointerClient) {
+      this.pointerDirty = false;
+      this.resolveHover();
+    }
     // After the reveal, so the lift survives the intro's matrix rewrites.
     this.updateHoverHighlight(delta);
     this.updateAimBox(delta);
@@ -1875,6 +1702,21 @@ export class WorldScene {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.disposeWorld();
+    // Environment and outline resources live outside worldGroup, so disposeWorld never
+    // reaches them; everything per-scene-instance is freed here, shared resources last.
+    this.grid.geometry.dispose();
+    this.gridMaterial.dispose();
+    this.sky.traverse((descendant) => {
+      if (!(descendant instanceof THREE.Points)) return;
+      descendant.geometry.dispose();
+      const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
+      materials.forEach((material) => material.dispose());
+    });
+    this.outlineGeometry.dispose();
+    this.selectionMaterial.dispose();
+    this.aimMaterial.dispose();
+    this.unitBox.dispose();
+    this.glowTexture.dispose();
     this.renderer.dispose();
   }
 }

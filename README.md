@@ -42,7 +42,7 @@ FSN is a pnpm workspace with two deliberately separate application shells:
 - Press `Backspace` to return to the parent.
 - In the browser, back and forward retrace the directories you entered, and the address bar names the one you are in, so a reload returns to it.
 - Press `/` or `Cmd/Ctrl + K` to search the current directory.
-- Open objects in old-school viewer windows. Unknown or executable objects produce an access-denied screen, with a `FORCE HEX DUMP` override.
+- Open objects in old-school viewer windows. In the browser, unknown or executable objects produce an access-denied screen, with a `FORCE HEX DUMP` override. On desktop, an object no viewer can show is handed to its native application instead, when the file policy allows it; refused objects get the access-denied screen.
 
 ## The address
 
@@ -111,7 +111,7 @@ The address holds directory names from the folder you opened. A fragment is neve
 
 The desktop app asks Tauri for access only to a directory selected through the native picker. A Rust-owned active-root capability validates every native filesystem command; choosing another folder or returning to the demo revokes the old root. There is no static home-directory or global filesystem scope.
 
-- **Open in native app** passes the selected file to a Rust command that canonicalizes it, verifies it is an allowed regular file, and only then opens it.
+- **Open in native app** passes the selected file to a Rust command that resolves it lexically against the canonicalized granted root, rejecting `..` and absolute components, then relies on capability-scoped filesystem access to open it; symbolic links are refused. A regular file must clear an extension deny-list and, on Unix, must not be executable; on macOS an application bundle may be opened as itself.
 - **Text editing** accepts valid UTF-8 files, preserves BOM and line endings, saves only after an explicit click, warns about unsaved changes, checks content/identity snapshots immediately before saving, and uses atomic replacement to avoid partial writes.
 - Demo objects remain read-only and never receive native actions.
 
@@ -125,7 +125,8 @@ That runs all TypeScript checks, tests, and both Vite webview builds. Verify the
 
 ```sh
 cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
-cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo clippy --locked --all-targets --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
 
 Create a local desktop bundle for the current operating system with:

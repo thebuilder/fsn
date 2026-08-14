@@ -5,7 +5,6 @@
   "windows": ["main"],
   "platforms": ["macOS", "windows", "linux"],
   "permissions": [
-    "core:path:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-destroy",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeTextDocument, serializeTextDocument } from "./text-codec";
+import { decodeTextDocument, isStrictUtf8, serializeTextDocument } from "./text-codec";
 
 const encoder = new TextEncoder();
 
@@ -50,5 +50,31 @@ describe("text document codec", () => {
 
   it("rejects invalid UTF-8 instead of replacing malformed bytes", () => {
     expect(() => decodeTextDocument(new Uint8Array([0xc3, 0x28]))).toThrow("not valid UTF-8 text");
+  });
+});
+
+describe("isStrictUtf8", () => {
+  it("accepts plain ASCII", () => {
+    expect(isStrictUtf8(encoded("hello world"))).toBe(true);
+  });
+
+  it("accepts UTF-8 with a BOM", () => {
+    expect(isStrictUtf8(encoded("first\nsecond", true))).toBe(true);
+  });
+
+  it("accepts multi-byte emoji", () => {
+    expect(isStrictUtf8(encoded("sparkles ✨ rocket 🚀"))).toBe(true);
+  });
+
+  it("rejects bytes that are not valid UTF-8 text", () => {
+    expect(isStrictUtf8(new Uint8Array([0xff, 0xfe]))).toBe(false);
+  });
+
+  it("rejects a lone continuation byte", () => {
+    expect(isStrictUtf8(new Uint8Array([0x80]))).toBe(false);
+  });
+
+  it("rejects a truncated multi-byte sequence", () => {
+    expect(isStrictUtf8(new Uint8Array([0xe2, 0x82]))).toBe(false);
   });
 });

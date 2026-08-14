@@ -95,6 +95,23 @@ const imageExtensions = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "j
 const audioExtensions = new Set(["aac", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
 const videoExtensions = new Set(["avi", "m4v", "mkv", "mov", "mp4", "mpeg", "ogv", "webm"]);
 const documentExtensions = new Set([...tabularTextExtensions, ...textDocumentExtensions, "doc", "docx", "pdf"]);
+
+/**
+ * The single source of truth for extension -> MIME type, so a platform adapter never has to
+ * hand-maintain its own map that can silently drift from the classification sets above (a
+ * `.jfif` file once routed to the image viewer while typed `application/octet-stream`, because
+ * the desktop app's map lacked the entry core already knew about).
+ */
+const extensionMimeTypes = new Map<string, string>([
+  ["aac", "audio/aac"], ["aiff", "audio/aiff"], ["apng", "image/apng"], ["avif", "image/avif"],
+  ["avi", "video/x-msvideo"], ["bmp", "image/bmp"], ["flac", "audio/flac"], ["gif", "image/gif"],
+  ["ico", "image/x-icon"], ["jfif", "image/jpeg"], ["jpeg", "image/jpeg"], ["jpg", "image/jpeg"], ["m4a", "audio/mp4"],
+  ["m4v", "video/mp4"], ["mkv", "video/x-matroska"], ["mov", "video/quicktime"], ["mp3", "audio/mpeg"],
+  ["mp4", "video/mp4"], ["mpeg", "video/mpeg"], ["oga", "audio/ogg"], ["ogg", "audio/ogg"],
+  ["ogv", "video/ogg"], ["opus", "audio/opus"], ["pdf", "application/pdf"], ["png", "image/png"],
+  ["svg", "image/svg+xml"], ["tif", "image/tiff"], ["tiff", "image/tiff"], ["wav", "audio/wav"],
+  ["weba", "audio/webm"], ["webm", "video/webm"], ["webp", "image/webp"],
+]);
 const archiveExtensions = new Set(["7z", "bz2", "dmg", "gz", "iso", "jar", "rar", "tar", "tgz", "zip"]);
 const modelExtensions = new Set(["glb", "gltf", "obj", "ply", "stl"]);
 const fontExtensions = new Set(["otf", "ttf", "woff", "woff2"]);
@@ -120,6 +137,14 @@ export function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
+
+/** The MIME type to hand a `Blob`/`File` constructor for this name, or a safe generic fallback. */
+export function mimeTypeFor(name: string): string {
+  return extensionMimeTypes.get(extensionOf(name)) ?? "application/octet-stream";
+}
+
+/** Exposed only so tests can assert every classified media extension also has a MIME entry; not for feature code. */
+export const mediaExtensionSets = { image: imageExtensions, audio: audioExtensions, video: videoExtensions } as const;
 
 /** Classifies files that carry no usable extension, including scoped dotfiles like `.env.local`. */
 function namedCategory(name: string): FileCategory | undefined {
@@ -223,14 +248,20 @@ export function searchFilesystem(
   let visited = 0;
   let complete = true;
 
-  while (queue.length) {
-    const trail = queue.shift() as FsNode[];
-    const children = sortNodes(trail[trail.length - 1].children ?? []);
+  // Adapters store `children` sorted at read time, and the ranking below re-orders
+  // every survivor anyway — so sorting here would buy nothing but the cost of an
+  // options-object `localeCompare` per directory visited. An index cursor replaces
+  // popping the array from its front, so growing the frontier stays O(1) instead of O(n).
+  let head = 0;
+  while (head < queue.length) {
+    const trail = queue[head];
+    head += 1;
+    const children = trail[trail.length - 1].children ?? [];
     for (const node of children) {
       visited += 1;
       if (visited > searchVisitLimit) {
         complete = false;
-        queue.length = 0;
+        head = queue.length;
         break;
       }
       if (!normalized || node.name.toLowerCase().includes(normalized)) {
@@ -252,6 +283,38 @@ export function searchFilesystem(
   });
 
   return { matches: candidates.slice(0, options.limit), total, unreadDirectories, complete };
+}
+
+/**
+ * The unread frontier under `base`: directories whose contents search cannot see.
+ * Breadth-first and capped, so one deepening step reads the shallowest unknowns first.
+ * Pure, no I/O — it only reports which nodes a caller could read next.
+ */
+export function unreadDirectoriesUnder(
+  base: FsNode,
+  limit: number,
+  exclude?: ReadonlySet<string>,
+): FsNode[] {
+  const frontier: FsNode[] = [];
+  // Same index-cursor queue as searchFilesystem, for the same reason: growing the
+  // frontier stays O(1) instead of paying to shift the array on every directory visited.
+  const queue: FsNode[] = [base];
+  let head = 0;
+  while (head < queue.length && frontier.length < limit) {
+    const node = queue[head];
+    head += 1;
+    for (const child of node.children ?? []) {
+      if (child.kind !== "directory") continue;
+      if (child.children) {
+        queue.push(child);
+        continue;
+      }
+      if (exclude?.has(child.id)) continue;
+      frontier.push(child);
+      if (frontier.length >= limit) break;
+    }
+  }
+  return frontier;
 }
 
 /** Name matches sort ahead of the rest: whole prefix, then word start, then anywhere. */

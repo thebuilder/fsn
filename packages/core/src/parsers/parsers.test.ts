@@ -36,6 +36,21 @@ describe("delimited parser", () => {
     expect(delimiterFor("report.tsv", "a,b,c")).toBe("\t");
     expect(delimiterFor("quoted.csv", '"a;b",c')).toBe(",");
   });
+
+  it("clamps a row wider than maxColumns and flags the clamp", () => {
+    const wideRow = ",".repeat(600);
+    const sheet = parseDelimited(`h\n${wideRow}\n`, ",");
+
+    expect(sheet.columns).toBe(512);
+    expect(sheet.columnsTruncated).toBe(true);
+  });
+
+  it("leaves a normal sheet's column count alone", () => {
+    const sheet = parseDelimited("a,b,c\n1,2,3\n", ",");
+
+    expect(sheet.columns).toBe(3);
+    expect(sheet.columnsTruncated).toBe(false);
+  });
 });
 
 describe("hex dump", () => {
@@ -105,11 +120,11 @@ describe("zip directory", () => {
     ];
   }
 
-  function archive(entries: number[][], comment = ""): Uint8Array {
+  function archive(entries: number[][], comment = "", claimedCount = entries.length): Uint8Array {
     const directory = entries.flat();
     return new Uint8Array([
       ...directory,
-      ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(entries.length), ...u16(entries.length),
+      ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(claimedCount), ...u16(claimedCount),
       ...u32(directory.length), ...u32(0), ...u16(comment.length), ...text(comment),
     ]);
   }
@@ -137,5 +152,19 @@ describe("zip directory", () => {
 
   it("rejects bytes with no central directory", () => {
     expect(() => readZipDirectory(new Uint8Array(64))).toThrow(/central directory/i);
+  });
+
+  it("is not truncated when every promised entry is present", () => {
+    const zip = readZipDirectory(archive([centralEntry("a.txt", 1, 1), centralEntry("b.txt", 1, 1)]));
+
+    expect(zip.truncated).toBe(false);
+    expect(zip.entries).toHaveLength(2);
+  });
+
+  it("flags a partial index when the EOCD count exceeds the actual central records", () => {
+    const zip = readZipDirectory(archive([centralEntry("a.txt", 1, 1), centralEntry("b.txt", 1, 1)], "", 5));
+
+    expect(zip.truncated).toBe(true);
+    expect(zip.entries).toHaveLength(2);
   });
 });

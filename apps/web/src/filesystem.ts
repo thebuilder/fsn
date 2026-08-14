@@ -25,6 +25,13 @@ type BrowserResource =
 const browserResources = new Map<string, BrowserResource>();
 let sourceSequence = 0;
 
+/**
+ * Two callers racing the same directory must share one read, or the loser's node graph
+ * leaks into navigation state while the winner's result is the one actually stored.
+ */
+const childrenInFlight = new Map<string, Promise<FsNode[]>>();
+const peekInFlight = new Map<string, Promise<DirectoryPeek>>();
+
 function sourceId(prefix: "local" | "import", name: string): string {
   sourceSequence += 1;
   return `${prefix}:${sourceSequence}:${encodeURIComponent(name)}`;
@@ -114,8 +121,18 @@ export async function rootFromDirectoryHandle(handle: FileSystemDirectoryHandle)
 export async function ensureChildren(node: FsNode): Promise<FsNode[]> {
   if (node.children) return node.children;
   if (node.kind !== "directory" || !directoryHandleFor(node)) return [];
-  node.children = await readHandleChildren(node);
-  return node.children;
+  const inFlight = childrenInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    node.children = await readHandleChildren(node);
+    return node.children;
+  })();
+  childrenInFlight.set(node.id, read);
+  try {
+    return await read;
+  } finally {
+    childrenInFlight.delete(node.id);
+  }
 }
 
 /**
@@ -138,23 +155,53 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
     return node.peek;
   }
 
-  const peek: DirectoryPeek = { total: 0, categories: [] };
-  const handle = directoryHandleFor(node);
-  if (handle) {
-    try {
-      const directory = handle as DirectoryHandleWithEntries;
-      for await (const [name, childHandle] of directory.entries()) {
-        peek.total += 1;
-        if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
-          peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
+  const inFlight = peekInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    const peek: DirectoryPeek = { total: 0, categories: [] };
+    const handle = directoryHandleFor(node);
+    if (handle) {
+      try {
+        const directory = handle as DirectoryHandleWithEntries;
+        for await (const [name, childHandle] of directory.entries()) {
+          peek.total += 1;
+          if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
+            peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
+          }
         }
+      } catch {
+        // A directory we are not allowed to list simply previews as empty land.
       }
-    } catch {
-      // A directory we are not allowed to list simply previews as empty land.
     }
+    node.peek = peek;
+    return peek;
+  })();
+  peekInFlight.set(node.id, read);
+  try {
+    return await read;
+  } finally {
+    peekInFlight.delete(node.id);
   }
-  node.peek = peek;
-  return peek;
+}
+
+/** Resolves file metadata a pool at a time: one slow handle stalls its slot, not the directory. */
+async function fillFileMetadata(pending: { node: FsNode; handle: FileSystemFileHandle }[]): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < pending.length) {
+      const { node, handle } = pending[next];
+      next += 1;
+      try {
+        const file = await handle.getFile();
+        node.resource = registerResource(node.id, { kind: "file", file }, true);
+        node.size = file.size;
+        node.modified = file.lastModified;
+      } catch {
+        // Metadata can be denied independently; the node remains navigable.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(16, pending.length) }, worker));
 }
 
 async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
@@ -162,6 +209,7 @@ async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
   const handle = directoryHandleFor(parent);
   if (!handle) return children;
   const directory = handle as DirectoryHandleWithEntries;
+  const pending: { node: FsNode; handle: FileSystemFileHandle }[] = [];
   for await (const [name, childHandle] of directory.entries()) {
     const id = `${parent.id}/${encodeURIComponent(name)}`;
     const node: FsNode = {
@@ -178,17 +226,11 @@ async function readHandleChildren(parent: FsNode): Promise<FsNode[]> {
       ),
     };
     if (childHandle.kind === "file") {
-      try {
-        const file = await (childHandle as FileSystemFileHandle).getFile();
-        node.resource = registerResource(id, { kind: "file", file }, true);
-        node.size = file.size;
-        node.modified = file.lastModified;
-      } catch {
-        // Metadata can be denied independently; the node remains navigable.
-      }
+      pending.push({ node, handle: childHandle as FileSystemFileHandle });
     }
     children.push(node);
   }
+  await fillFileMetadata(pending);
   return sortNodes(children);
 }
 

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   DIRECTORY_PEEK_LIMIT,
   categoryOf,
+  mimeTypeFor,
   sortNodes,
   type DirectoryPeek,
   type FilesystemRoot,
@@ -31,6 +32,13 @@ type PickedRoot = {
 };
 
 const nativeCapabilities = new Map<string, { canEditText: boolean; canOpenNative: boolean }>();
+
+/**
+ * Two callers racing the same directory must share one read, or the loser's node graph
+ * leaks into navigation state while the winner's result is the one actually stored.
+ */
+const childrenInFlight = new Map<string, Promise<FsNode[]>>();
+const peekInFlight = new Map<string, Promise<DirectoryPeek>>();
 
 export type DesktopFileSnapshot = {
   size: number;
@@ -62,6 +70,7 @@ type NativeFileSnapshot = Omit<DesktopFileSnapshot, "modified" | "modifiedNs"> &
 type NativeTextReadResult = {
   bytes: ArrayBuffer | number[];
   snapshot: NativeFileSnapshot;
+  isUtf8: boolean;
 };
 
 /** Opens a native folder picker and atomically replaces the active Rust grant. */
@@ -90,27 +99,37 @@ export async function ensureChildren(parent: FsNode): Promise<FsNode[]> {
   const path = desktopDirectoryPath(parent);
   if (!path) return [];
 
-  const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
-  const children: FsNode[] = entries.map((entry) => {
-    const isDirectory = entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle;
-    const node: FsNode = {
-      id: entry.path,
-      parentId: parent.id,
-      name: entry.name,
-      kind: isDirectory ? "directory" : "file",
-      size: entry.isFile ? entry.size : undefined,
-      modified: entry.modified ?? undefined,
-      resource: { id: entry.path, readable: entry.isFile && !entry.isSymlink && entry.readable },
-    };
-    nativeCapabilities.set(entry.path, {
-      canEditText: entry.canEditText,
-      canOpenNative: entry.canOpenNative,
+  const inFlight = childrenInFlight.get(parent.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
+    const children: FsNode[] = entries.map((entry) => {
+      const isDirectory = entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle;
+      const node: FsNode = {
+        id: entry.path,
+        parentId: parent.id,
+        name: entry.name,
+        kind: isDirectory ? "directory" : "file",
+        size: entry.isFile ? entry.size : undefined,
+        modified: entry.modified ?? undefined,
+        resource: { id: entry.path, readable: entry.isFile && !entry.isSymlink && entry.readable },
+      };
+      nativeCapabilities.set(entry.path, {
+        canEditText: entry.canEditText,
+        canOpenNative: entry.canOpenNative,
+      });
+      return node;
     });
-    return node;
-  });
 
-  parent.children = sortNodes(children);
-  return parent.children;
+    parent.children = sortNodes(children);
+    return parent.children;
+  })();
+  childrenInFlight.set(parent.id, read);
+  try {
+    return await read;
+  } finally {
+    childrenInFlight.delete(parent.id);
+  }
 }
 
 export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
@@ -126,23 +145,34 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
 
   const path = desktopDirectoryPath(node);
   if (!path) return { total: 0, categories: [] };
+
+  const inFlight = peekInFlight.get(node.id);
+  if (inFlight) return inFlight;
+  const read = (async () => {
+    try {
+      const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
+      node.peek = {
+        total: entries.length,
+        categories: entries.slice(0, DIRECTORY_PEEK_LIMIT).map((entry) =>
+          categoryOf({
+            id: entry.path,
+            parentId: node.id,
+            name: entry.name,
+            kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
+          }),
+        ),
+      };
+    } catch {
+      node.peek = { total: 0, categories: [] };
+    }
+    return node.peek;
+  })();
+  peekInFlight.set(node.id, read);
   try {
-    const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
-    node.peek = {
-      total: entries.length,
-      categories: entries.slice(0, DIRECTORY_PEEK_LIMIT).map((entry) =>
-        categoryOf({
-          id: entry.path,
-          parentId: node.id,
-          name: entry.name,
-          kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
-        }),
-      ),
-    };
-  } catch {
-    node.peek = { total: 0, categories: [] };
+    return await read;
+  } finally {
+    peekInFlight.delete(node.id);
   }
-  return node.peek;
 }
 
 export async function readDesktopResource(
@@ -159,14 +189,31 @@ export async function readDesktopResource(
           maxBytes: MAX_BROWSER_READ_BYTES,
         }),
         snapshot: undefined,
+        isUtf8: true,
       };
   signal?.throwIfAborted();
   const payload = loaded.bytes instanceof ArrayBuffer
     ? new Uint8Array(loaded.bytes)
     : Uint8Array.from(loaded.bytes);
   node.size = payload.byteLength;
+  if (loaded.snapshot && !loaded.isUtf8) {
+    // A snapshot arms the write path's atomic-save flow. Bytes the editor cannot
+    // faithfully round-trip through UTF-8 must never carry a snapshot forward, or a
+    // later save could silently corrupt the file's non-UTF-8 content.
+    if (node.resource) {
+      const existing = nativeCapabilities.get(node.resource.id);
+      nativeCapabilities.set(node.resource.id, {
+        canEditText: false,
+        canOpenNative: existing?.canOpenNative ?? false,
+      });
+    }
+    return {
+      blob: new Blob([payload], { type: mimeTypeFor(node.name) }),
+      snapshot: undefined,
+    };
+  }
   return {
-    blob: new Blob([payload], { type: desktopMimeType(node.name) }),
+    blob: new Blob([payload], { type: mimeTypeFor(node.name) }),
     snapshot: loaded.snapshot ? normalizeSnapshot(loaded.snapshot) : undefined,
   };
 }
@@ -220,20 +267,6 @@ function desktopNativePath(node: FsNode): string {
     throw new Error("This object cannot be opened in a native application.");
   }
   return node.resource.id;
-}
-
-function desktopMimeType(name: string): string {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  return ({
-    aac: "audio/aac", aiff: "audio/aiff", apng: "image/apng", avif: "image/avif",
-    avi: "video/x-msvideo", bmp: "image/bmp", flac: "audio/flac", gif: "image/gif",
-    ico: "image/x-icon", jpeg: "image/jpeg", jpg: "image/jpeg", m4a: "audio/mp4",
-    m4v: "video/mp4", mkv: "video/x-matroska", mov: "video/quicktime", mp3: "audio/mpeg",
-    mp4: "video/mp4", mpeg: "video/mpeg", oga: "audio/ogg", ogg: "audio/ogg",
-    ogv: "video/ogg", opus: "audio/opus", pdf: "application/pdf", png: "image/png",
-    svg: "image/svg+xml", tif: "image/tiff", tiff: "image/tiff", wav: "audio/wav",
-    weba: "audio/webm", webm: "video/webm", webp: "image/webp",
-  } as Record<string, string>)[extension] ?? "application/octet-stream";
 }
 
 function normalizeSnapshot(snapshot: NativeFileSnapshot): DesktopFileSnapshot {

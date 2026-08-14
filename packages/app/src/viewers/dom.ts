@@ -9,12 +9,6 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
-export function escapeHtml(value: string): string {
-  const holder = document.createElement("span");
-  holder.textContent = value;
-  return holder.innerHTML;
-}
-
 /** The shared red-alert panel: used for denials, decode failures and unsupported payloads. */
 export function noticePanel(code: string, heading: string, body: string): HTMLElement {
   const panel = el("div", "access-denied");

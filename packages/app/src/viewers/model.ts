@@ -53,10 +53,24 @@ async function parse(extension: string, buffer: ArrayBuffer): Promise<THREE.Obje
     return new OBJLoader().parse(new TextDecoder().decode(buffer));
   }
   const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-  // An empty resource path keeps the loader from chasing sibling .bin/.png files it
-  // cannot reach; self-contained .glb and data-URI .gltf still resolve.
-  const gltf = await new GLTFLoader().parseAsync(buffer, "");
+  // An empty resource path alone is not enough: three resolves absolute URIs unchanged
+  // regardless of it, so a crafted .gltf could still name an attacker's host for its
+  // buffers or images. The URL modifier neutralises every reference before it resolves;
+  // self-contained .glb and data-URI .gltf still work, everything else fails locally.
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(confineLoaderUrl);
+  const gltf = await new GLTFLoader(manager).parseAsync(buffer, "");
   return gltf.scene;
+}
+
+/**
+ * A model file names its own resources, and those names are untrusted input. Only
+ * self-contained references may resolve; anything that would leave the page —
+ * absolute, protocol-relative, or path-relative — collapses to an empty data URI,
+ * so the request never happens and the loader fails locally instead.
+ */
+export function confineLoaderUrl(url: string): string {
+  return url.startsWith("data:") || url.startsWith("blob:") ? url : "data:,";
 }
 
 function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerHost): void {
@@ -74,8 +88,13 @@ function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerH
   const surface = new THREE.MeshStandardMaterial({ color: PHOSPHOR, roughness: 0.45, metalness: 0.15, flatShading: true });
   const wire = new THREE.MeshBasicMaterial({ color: 0xc8fff0, wireframe: true, transparent: true, opacity: 0.55 });
   const meshes: THREE.Mesh[] = [];
+  // Loader-produced materials (and any embedded GLB textures they hold) are about to be
+  // discarded in favour of the shared phosphor surface; collect them so cleanup can free
+  // what three.js's own garbage collector never will.
+  const replaced: THREE.Material[] = [];
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+    replaced.push(...(Array.isArray(child.material) ? child.material : [child.material]));
     child.material = surface;
     meshes.push(child);
   });
@@ -178,6 +197,7 @@ function mountViewport(stage: HTMLElement, object: THREE.Object3D, host: ViewerH
     cancelAnimationFrame(animation);
     observer.disconnect();
     dispose(object);
+    replaced.forEach(disposeMaterialDeep);
     surface.dispose();
     wire.dispose();
     grid.geometry.dispose();
@@ -202,4 +222,12 @@ function dispose(object: THREE.Object3D): void {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh) child.geometry.dispose();
   });
+}
+
+/** Frees a material and every texture it references, not just the common `map` slot. */
+function disposeMaterialDeep(material: THREE.Material): void {
+  for (const value of Object.values(material)) {
+    if (value instanceof THREE.Texture) value.dispose();
+  }
+  material.dispose();
 }

@@ -5,6 +5,8 @@ export type Sheet = {
   totalRows: number;
   columns: number;
   truncated: boolean;
+  /** True only when `columns` was clamped to `maxColumns`. */
+  columnsTruncated: boolean;
 };
 
 /**
@@ -44,7 +46,7 @@ function countOutsideQuotes(line: string, character: string): number {
  * newlines. `maxRows` caps what is returned without capping what is counted, so the
  * viewer can say how much it withheld.
  */
-export function parseDelimited(text: string, delimiter: string, maxRows = 2_000): Sheet {
+export function parseDelimited(text: string, delimiter: string, maxRows = 2_000, maxColumns = 512): Sheet {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -91,6 +93,8 @@ export function parseDelimited(text: string, delimiter: string, maxRows = 2_000)
 
   const header = rows.shift() ?? [];
   if (header.length) totalRows -= 1;
-  const columns = rows.reduce((widest, entry) => Math.max(widest, entry.length), header.length);
-  return { header, rows, totalRows, columns, truncated: totalRows > rows.length };
+  const widest = rows.reduce((max, entry) => Math.max(max, entry.length), header.length);
+  const columnsTruncated = widest > maxColumns;
+  const columns = columnsTruncated ? maxColumns : widest;
+  return { header, rows, totalRows, columns, truncated: totalRows > rows.length, columnsTruncated };
 }

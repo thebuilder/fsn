@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rootFromFileList } from "./filesystem";
+import { ensureChildren, peekChildren, rootFromDirectoryHandle, rootFromFileList } from "./filesystem";
 
 describe("browser filesystem adapter", () => {
   it("returns no snapshot for an empty selection", () => {
@@ -19,5 +19,143 @@ describe("browser filesystem adapter", () => {
     expect(snapshot?.root.children?.[1].children?.[0].name).toBe("readme.txt");
     expect(snapshot?.root.children?.[1].children?.[0].resource?.readable).toBe(true);
     expect(snapshot?.sourceLabel).toContain("LOCAL SNAPSHOT");
+  });
+});
+
+/** A promise plus the resolver to release it later, for gating fake async work in tests. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+type FakeFileEntry = {
+  kind: "file";
+  name: string;
+  getFile: () => Promise<unknown>;
+};
+
+type FakeDirEntry = {
+  kind: "directory";
+  name: string;
+  entries: () => AsyncGenerator<[string, FakeFileEntry | FakeDirEntry]>;
+};
+
+function fakeFile(name: string, getFile: () => Promise<unknown>): FakeFileEntry {
+  return { kind: "file", name, getFile };
+}
+
+/** Builds a fake `FileSystemDirectoryHandle`, optionally gating and counting calls to `entries()`. */
+function fakeDirectory(
+  name: string,
+  childEntries: [string, FakeFileEntry | FakeDirEntry][],
+  options: { gate?: Promise<void>; onEntries?: () => void } = {},
+): FakeDirEntry {
+  return {
+    kind: "directory",
+    name,
+    entries: async function* (): AsyncGenerator<[string, FakeFileEntry | FakeDirEntry]> {
+      options.onEntries?.();
+      if (options.gate) await options.gate;
+      for (const entry of childEntries) yield entry;
+    },
+  };
+}
+
+describe("browser filesystem adapter: in-flight dedup", () => {
+  it("shares one in-flight read when two callers call ensureChildren for the same directory concurrently", async () => {
+    const gate = deferred<void>();
+    let entriesCalls = 0;
+    const subDir = fakeDirectory("sub", [], {
+      gate: gate.promise,
+      onEntries: () => {
+        entriesCalls += 1;
+      },
+    });
+    const rootDir = fakeDirectory("dedup-children-root", [["sub", subDir]]);
+    const snapshot = await rootFromDirectoryHandle(rootDir as unknown as FileSystemDirectoryHandle);
+    const subNode = snapshot.root.children?.find((node) => node.name === "sub");
+    expect(subNode).toBeDefined();
+
+    const first = ensureChildren(subNode!);
+    const second = ensureChildren(subNode!);
+    gate.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(secondResult);
+    expect(entriesCalls).toBe(1);
+  });
+
+  it("shares one in-flight read when two callers call peekChildren for the same directory concurrently", async () => {
+    const gate = deferred<void>();
+    let entriesCalls = 0;
+    const subDir = fakeDirectory("sub", [], {
+      gate: gate.promise,
+      onEntries: () => {
+        entriesCalls += 1;
+      },
+    });
+    const rootDir = fakeDirectory("dedup-peek-root", [["sub", subDir]]);
+    const snapshot = await rootFromDirectoryHandle(rootDir as unknown as FileSystemDirectoryHandle);
+    const subNode = snapshot.root.children?.find((node) => node.name === "sub");
+    expect(subNode).toBeDefined();
+
+    const first = peekChildren(subNode!);
+    const second = peekChildren(subNode!);
+    gate.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(secondResult);
+    expect(entriesCalls).toBe(1);
+  });
+});
+
+describe("browser filesystem adapter: metadata pool", () => {
+  it("batches metadata for every file through the pool, regardless of completion order", async () => {
+    const fileCount = 40;
+    const entries: [string, FakeFileEntry][] = Array.from({ length: fileCount }, (_, index) => {
+      const name = `file-${String(index).padStart(2, "0")}.txt`;
+      return [
+        name,
+        fakeFile(
+          name,
+          () =>
+            new Promise((resolve) => {
+              // Reverse the completion order so the fastest-queued handle is not the first slotted.
+              setTimeout(() => resolve({ size: index + 1, lastModified: index }), (fileCount - index) % 7);
+            }),
+        ),
+      ];
+    });
+    const dir = fakeDirectory("pool-root", entries);
+
+    const snapshot = await rootFromDirectoryHandle(dir as unknown as FileSystemDirectoryHandle);
+    const children = snapshot.root.children ?? [];
+
+    expect(children).toHaveLength(fileCount);
+    for (const child of children) {
+      expect(child.size).toBeGreaterThan(0);
+      expect(child.modified).toBeDefined();
+    }
+  });
+
+  it("tolerates one entry's metadata failing without losing the others", async () => {
+    const entries: [string, FakeFileEntry][] = [
+      ["a.txt", fakeFile("a.txt", () => Promise.resolve({ size: 1, lastModified: 1 }))],
+      ["b.txt", fakeFile("b.txt", () => Promise.reject(new Error("permission denied")))],
+      ["c.txt", fakeFile("c.txt", () => Promise.resolve({ size: 3, lastModified: 3 }))],
+    ];
+    const dir = fakeDirectory("failure-root", entries);
+
+    const snapshot = await rootFromDirectoryHandle(dir as unknown as FileSystemDirectoryHandle);
+    const children = snapshot.root.children ?? [];
+
+    expect(children.map((node) => node.name)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    const failed = children.find((node) => node.name === "b.txt");
+    expect(failed?.size).toBeUndefined();
+    expect(children.find((node) => node.name === "a.txt")?.size).toBe(1);
+    expect(children.find((node) => node.name === "c.txt")?.size).toBe(3);
   });
 });

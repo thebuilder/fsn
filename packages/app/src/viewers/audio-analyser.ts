@@ -80,7 +80,10 @@ export function createAudioAnalyser(media: HTMLMediaElement): AudioAnalyser {
   let started = false;
 
   let frequency = new Uint8Array(FFT_SIZE / 2);
-  let waveform = new Uint8Array(FFT_SIZE);
+  // Byte 128 is the scope's centerline; a zero-filled buffer would draw silence pinned
+  // to the floor instead of the flat line it actually is, before the graph starts or
+  // forever if AudioContext construction fails.
+  let waveform = new Uint8Array(FFT_SIZE).fill(128);
   const onsets = createOnsetDetector();
 
   const start = (): void => {
@@ -107,6 +110,7 @@ export function createAudioAnalyser(media: HTMLMediaElement): AudioAnalyser {
       void context?.close();
       context = undefined;
       analyser = undefined;
+      waveform = new Uint8Array(FFT_SIZE).fill(128);
     }
   };
 

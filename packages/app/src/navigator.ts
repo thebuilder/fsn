@@ -5,6 +5,7 @@ import {
   pathFor,
   searchFilesystem,
   sortNodes,
+  unreadDirectoriesUnder,
   type FilesystemRoot,
   type FsNode,
   type SearchMatch,
@@ -53,11 +54,13 @@ const status = getElement<HTMLElement>("status");
 const folderButton = getElement<HTMLButtonElement>("folder-button");
 const folderFallback = getElement<HTMLInputElement>("folder-fallback");
 const demoButton = getElement<HTMLButtonElement>("demo-button");
+const refreshButton = getElement<HTMLButtonElement>("refresh-button");
 const searchButton = getElement<HTMLButtonElement>("search-button");
 const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
 const searchCount = getElement<HTMLElement>("search-count");
+const searchDeepen = getElement<HTMLButtonElement>("search-deepen");
 const scopeSwitch = getElement<HTMLElement>("scope-switch");
 const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
 const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
@@ -231,7 +234,6 @@ async function renderDirectory(
   route: RouteIntent = "push",
 ): Promise<void> {
   if (lifecycle.signal.aborted) return;
-  syncRoute(route);
   renderChrome();
   const generation = (renderGeneration += 1);
   const current = currentDirectory();
@@ -249,12 +251,29 @@ async function renderDirectory(
     } finally {
       settle();
     }
-    if (generation !== renderGeneration || lifecycle.signal.aborted) return;
+    // The camera may have adopted a different directory while the peeks were in flight,
+    // which bumps the generation but can also leave it unchanged if nothing else rendered
+    // meanwhile — so the identity check catches what the counter alone might miss.
+    if (generation !== renderGeneration || lifecycle.signal.aborted || currentDirectory().id !== current.id) return;
   }
 
   if (lifecycle.signal.aborted) return;
 
-  world.setDirectory(current, children, direction);
+  // Deferred past every guard above: a render that gets superseded while its peeks are
+  // in flight must never write a history entry for a directory it did not end up
+  // drawing. adoptArea already wrote its own entry for whatever the camera actually
+  // settled on, so an abandoned render reaching this line would otherwise double it.
+  syncRoute(route);
+
+  try {
+    world.setDirectory(current, children, direction);
+  } catch (error) {
+    // The chrome (breadcrumbs, address) has already committed to this directory; absorb
+    // a layout failure here so the app keeps working instead of leaving the 3D world
+    // silently stuck on whatever it drew last.
+    setStatus(`The world could not draw ${current.name}: ${error instanceof Error ? error.message : "unknown failure"}`, true);
+    return;
+  }
   if (announce) setStatus(`${current.name} mounted · ${children.length} objects`);
 }
 
@@ -262,6 +281,10 @@ async function renderDirectory(
 function adoptArea(directoryId: string): void {
   const trail = ancestryById.get(directoryId);
   if (!trail || trail[trail.length - 1].id === currentDirectory().id) return;
+  // An in-flight renderDirectory for the directory the camera has just left must not be
+  // allowed to win the world back once its peeks resolve; bumping the generation here
+  // invalidates it before this function hands the camera's chosen directory to the chrome.
+  renderGeneration += 1;
   ancestry = [...trail];
   syncRoute("push");
   renderChrome();
@@ -397,6 +420,49 @@ function goToRoot(): void {
   }
   ancestry = [ancestry[0]];
   void renderDirectory(true, "backward");
+}
+
+/**
+ * Re-lists the directory the camera is standing in, so a folder that changed on disk
+ * since it was last read — a download landing, a build emitting artifacts — catches up
+ * without leaving it. The demo is generated once and never drifts, so it declines with
+ * a status line instead of pretending to have re-read anything.
+ *
+ * Clearing the cached listing and evicting the built district before re-reading is what
+ * makes this a real re-list rather than a redraw of what was already known: the world
+ * rebuild that follows replays the district's reveal, which is the intended feedback
+ * that something changed underfoot.
+ */
+async function refreshDirectory(): Promise<void> {
+  if (lifecycle.signal.aborted) return;
+  const current = currentDirectory();
+  if (!filesystem.isLocal) {
+    setStatus("The demo filesystem is fixed in time.");
+    return;
+  }
+  current.children = undefined;
+  current.peek = undefined;
+  world.invalidateArea(current.id);
+  updateSelection(null);
+  refreshButton.disabled = true;
+  const settle = beginPending();
+  try {
+    await platform.ensureChildren(current);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : `Unable to re-read ${current.name}`, true);
+    return;
+  } finally {
+    settle();
+    refreshButton.disabled = false;
+  }
+  // The camera may have left this directory while the re-read was in flight; a render
+  // for a directory nobody is standing in anymore would only fight whatever navigated
+  // it away.
+  if (lifecycle.signal.aborted || currentDirectory().id !== current.id) return;
+  // "keep": this redraws where we already are, so the address bar has nothing new to
+  // say and no history entry is owed for it.
+  await renderDirectory(false, "backward", "keep");
+  if (!status.classList.contains("is-error")) setStatus(`Re-read ${current.name}`);
 }
 
 /**
@@ -613,8 +679,20 @@ let searchScope: "current" | "all" = "current";
 let resultButtons: HTMLButtonElement[] = [];
 let activeResultIndex = -1;
 
+/** How many unread directories one click of READ DEEPER pulls in. */
+const SEARCH_DEEPEN_BATCH = 64;
+/** How many of those reads run at once, so one slow handle does not stall the rest of the batch. */
+const SEARCH_DEEPEN_CONCURRENCY = 8;
+/**
+ * Directories this dialog session already tried to read — successfully or not. Scoped
+ * to one dialog's lifetime and cleared on open, so a permission grant made after closing
+ * search gets a fresh chance instead of being remembered as a dead end forever.
+ */
+const attemptedUnread = new Set<string>();
+
 function openSearch(): void {
   searchInput.value = "";
+  attemptedUnread.clear();
   applySearchScope(searchScope);
   searchDialog.showModal();
   searchInput.focus();
@@ -646,6 +724,8 @@ function renderSearchResults(query: string): void {
 
   if (!trimmed) {
     // An empty box browses the level you are standing on; listing whole trees is noise.
+    // There is no search outcome to deepen here, so the button stays out of the way.
+    searchDeepen.hidden = true;
     if (scope === "all") {
       searchCount.textContent = "";
       searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
@@ -665,6 +745,64 @@ function renderSearchResults(query: string): void {
   const outcome = searchFilesystem(base, trimmed, { limit: searchResultLimit });
   searchCount.textContent = describeOutcome(outcome);
   renderMatches(outcome.matches);
+  updateDeepenButton(outcome, scope);
+}
+
+/**
+ * Shows READ DEEPER only when there is somewhere left to read: the search itself
+ * reported unread directories, and the frontier under this scope (minus whatever this
+ * dialog session already tried) is not empty. The bounded walk below is what the click
+ * would read anyway, so computing it here is not a second full search — it is capped at
+ * the same batch size and doubles as the count in the button's label.
+ */
+function updateDeepenButton(outcome: SearchOutcome, scope: "current" | "all"): void {
+  if (outcome.unreadDirectories === 0) {
+    searchDeepen.hidden = true;
+    return;
+  }
+  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
+  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
+  searchDeepen.hidden = frontier.length === 0;
+  if (frontier.length > 0) {
+    searchDeepen.textContent = `READ ${Math.min(frontier.length, SEARCH_DEEPEN_BATCH)} MORE DIRECTORIES`;
+  }
+}
+
+/**
+ * Reads a batch of the unread frontier through the platform adapter, then re-runs the
+ * query so results, counts and the button itself all catch up to what got read. A
+ * directory that fails (denied, vanished) just stays unread — it is marked attempted so
+ * this session will not spend another read on it.
+ */
+async function deepenSearch(): Promise<void> {
+  const scope = effectiveSearchScope();
+  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
+  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
+  if (!frontier.length) return;
+  for (const node of frontier) attemptedUnread.add(node.id);
+  searchDeepen.disabled = true;
+  const settle = beginPending();
+  try {
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < frontier.length) {
+        const node = frontier[next];
+        next += 1;
+        try {
+          await platform.ensureChildren(node);
+        } catch {
+          // Swallowed: a denied or vanished directory just stays unread, and
+          // attemptedUnread already keeps this session from retrying it.
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SEARCH_DEEPEN_CONCURRENCY, frontier.length) }, worker));
+  } finally {
+    settle();
+    searchDeepen.disabled = false;
+    // A read that lands after the dialog closed only warms the cache — no DOM to update.
+    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value);
+  }
 }
 
 function renderMatches(matches: SearchMatch[]): void {
@@ -762,6 +900,23 @@ function trimName(name: string, length: number): string {
   return name.length > length ? `${name.slice(0, length - 1)}…` : name;
 }
 
+/** Coalesces keystrokes: the walk is synchronous on the frame thread, so re-running it on
+ * every keydown would block rendering for as long as the user keeps typing. */
+const searchRenderDelayMs = 90;
+let searchRenderTimer = 0;
+function scheduleSearchRender(): void {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = window.setTimeout(() => {
+    searchRenderTimer = 0;
+    if (!lifecycle.signal.aborted) renderSearchResults(searchInput.value);
+  }, searchRenderDelayMs);
+}
+function flushSearchRender(): void {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = 0;
+  renderSearchResults(searchInput.value);
+}
+
 folderButton.addEventListener("click", () => void (pendingReopen ? reopenRememberedDirectory(pendingReopen) : chooseFolder()), listener);
 demoButton.addEventListener("click", () => {
   void (async () => {
@@ -769,12 +924,14 @@ demoButton.addEventListener("click", () => {
   })();
 }, listener);
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
+refreshButton.addEventListener("click", () => void refreshDirectory(), listener);
 searchButton.addEventListener("click", openSearch, listener);
+searchDeepen.addEventListener("click", () => void deepenSearch(), listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
 // Escape is the desktop way out of these, and pressing the page behind them is the
 // same gesture for a hand that has no Escape key to reach for.
 [searchDialog, helpDialog, welcomeDialog].forEach((dialog) => dismissOnOutsidePress(dialog, listener));
-searchInput.addEventListener("input", () => renderSearchResults(searchInput.value), listener);
+searchInput.addEventListener("input", scheduleSearchRender, listener);
 searchDialog.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
@@ -785,6 +942,10 @@ searchDialog.addEventListener("keydown", (event) => {
   }
   // Enter from the input opens the highlighted result; the dialog's own buttons keep theirs.
   if (event.key === "Enter" && event.target === searchInput) {
+    // A pending debounced render must land first, or Enter can open whatever the stale
+    // list last highlighted. Only flush when a timer is actually pending — an
+    // unconditional flush would rebuild the list and reset the user's arrow-key selection.
+    if (searchRenderTimer) flushSearchRender();
     const active = resultButtons[activeResultIndex];
     if (!active) return;
     event.preventDefault();
@@ -974,12 +1135,17 @@ async function settleInitialView(): Promise<boolean> {
  */
 async function start(): Promise<void> {
   const settled = settleInitialView();
-  await Promise.race([settled, wait(600)]);
-  if (lifecycle.signal.aborted) return;
-  document.documentElement.dataset.boot = "ready";
-  // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
-  if (!(await settled) || lifecycle.signal.aborted) return;
-  welcomeDialog.showModal();
+  try {
+    await Promise.race([settled, wait(600)]);
+    if (lifecycle.signal.aborted) return;
+    // Awaiting a settled promise yields a microtask, not a frame: both land on one paint.
+    if (!(await settled) || lifecycle.signal.aborted) return;
+    welcomeDialog.showModal();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Startup failed", true);
+  } finally {
+    document.documentElement.dataset.boot = "ready";
+  }
 }
 
 void start();

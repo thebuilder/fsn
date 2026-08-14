@@ -11,6 +11,16 @@ export type DecodedTextDocument = {
 const UTF8_BOM = [0xef, 0xbb, 0xbf] as const;
 const LINE_SEPARATOR = /\r\n|\r|\n/g;
 
+/** Whether the exact bytes survive a UTF-8 decode/encode round trip untouched. */
+export function isStrictUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Strictly decodes UTF-8 and separates file-format details from editor content. */
 export function decodeTextDocument(bytes: Uint8Array): DecodedTextDocument {
   const hadUtf8Bom = UTF8_BOM.every((byte, index) => bytes[index] === byte);

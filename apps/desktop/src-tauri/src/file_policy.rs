@@ -1,8 +1,88 @@
 use std::path::Path;
 
 const BLOCKED_OPEN: &[&str] = &[
-    "app", "bat", "bin", "cmd", "com", "command", "cpl", "dat", "desktop", "dll", "dylib", "exe",
-    "hta", "lnk", "msi", "pkg", "ps1", "reg", "scr", "sh", "so", "vbs",
+    // Direct execution / installers
+    "app",
+    "bat",
+    "bin",
+    "cmd",
+    "com",
+    "command",
+    "cpl",
+    "dat",
+    "desktop",
+    "dll",
+    "dylib",
+    "exe",
+    "hta",
+    "lnk",
+    "msi",
+    "pkg",
+    "ps1",
+    "reg",
+    "scr",
+    "sh",
+    "so",
+    "vbs",
+    // Archives that execute or mount as a volume
+    "dmg",
+    "img",
+    "iso",
+    "jar",
+    "jnlp",
+    "smi",
+    "sparsebundle",
+    "sparseimage",
+    // macOS automation & location files
+    "applescript",
+    "fileloc",
+    "ftploc",
+    "inetloc",
+    "scpt",
+    "scptd",
+    "terminal",
+    "webloc",
+    "workflow",
+    // Windows script host & shell handlers. `js` is deliberately blocked here even though it is
+    // an editable text type: on Windows the shell executes `.js` via WSH. Text files always have
+    // a viewer, so the auto-open path never routes through this list for them anyway — this only
+    // guards the explicit native-open action.
+    "application",
+    "appref-ms",
+    "chm",
+    "gadget",
+    "js",
+    "jse",
+    "msc",
+    "msp",
+    "mst",
+    "pif",
+    "scf",
+    "sct",
+    "shb",
+    "shs",
+    "url",
+    "vbe",
+    "wsf",
+    "wsh",
+    // PowerShell family beyond ps1
+    "ps1xml",
+    "psc1",
+    "psd1",
+    "psm1",
+    // Installer/package formats that run on open
+    "apk",
+    "appimage",
+    "appx",
+    "msix",
+    "msixbundle",
+    "run",
+    // Shells beyond sh
+    "bash",
+    "csh",
+    "fish",
+    "ksh",
+    "zsh",
 ];
 
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -328,6 +408,29 @@ mod tests {
             "unknown.dat",
         ] {
             assert!(!can_edit_text(Path::new(name)), "expected non-text: {name}");
+        }
+    }
+
+    #[test]
+    fn widened_deny_list_blocks_native_open_of_execution_families() {
+        for name in [
+            "report.jar",
+            "backup.dmg",
+            "link.webloc",
+            "script.wsf",
+            "page.url",
+            "tool.appimage",
+        ] {
+            assert!(
+                !can_open_native(Path::new(name), false),
+                "expected blocked: {name}"
+            );
+        }
+        for name in ["photo.jpg", "notes.txt", "deck.key"] {
+            assert!(
+                can_open_native(Path::new(name), false),
+                "expected allowed: {name}"
+            );
         }
     }
 
