@@ -63,9 +63,9 @@
        The written keys are marked as keys, so a device with none never shows them. -->
   <section class="controls" id="controls" aria-label="3D navigation controls" tabindex="-1">
     <p data-input="keys"><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
-    <p data-input="keys"><kbd>↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
+    <p data-input="keys"><kbd class="key-glyph">↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
     <p data-input="keys"><kbd>Shift</kbd> Boost</p>
-    <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd aria-hidden="true">?</kbd> All controls</button>
+    <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd class="key-glyph" aria-hidden="true">?</kbd> All controls</button>
   </section>
 
   <div class="reticle" id="reticle" aria-hidden="true"><i></i><span>NO TARGET</span></div>
@@ -127,7 +127,7 @@
         <h3>Flight</h3>
         <dl>
           <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Fly forward, left, back, right</dd></div>
-          <div><dt><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd>Turn — swing the view up, left, down, right</dd></div>
+          <div><dt><kbd class="key-glyph">↑</kbd><kbd class="key-glyph">←</kbd><kbd class="key-glyph">↓</kbd><kbd class="key-glyph">→</kbd></dt><dd>Turn — swing the view up, left, down, right</dd></div>
           <div><dt><kbd>Alt</kbd></dt><dd>Hold to trade the two clusters: W A S D turns and the arrows fly. The strip at the foot of the screen says which is which</dd></div>
           <div><dt><kbd>R</kbd><kbd>F</kbd></dt><dd>Rise and descend</dd></div>
           <div><dt><kbd>Shift</kbd></dt><dd>Hold alongside any of these to fly and turn faster</dd></div>
@@ -144,8 +144,8 @@
           <div data-input="keys"><dt><kbd>Enter</kbd></dt><dd>Open the target — enter a directory, or read a file</dd></div>
           <div data-input="keys"><dt><kbd>Esc</kbd><kbd>Backspace</kbd></dt><dd>Go back to the parent directory</dd></div>
           <div id="help-history"><dt><kbd>Back</kbd><kbd>Forward</kbd></dt><dd>Retrace the directories you have walked through. The address names the one you are in, so a reload comes back to it</dd></div>
-          <div data-input="keys"><dt><kbd>⌘K</kbd><kbd>Ctrl K</kbd><kbd>/</kbd></dt><dd>Search the filesystem</dd></div>
-          <div data-input="keys"><dt><kbd>?</kbd></dt><dd>Show this page</dd></div>
+          <div data-input="keys"><dt><kbd><i>⌘</i>K</kbd><kbd>Ctrl K</kbd><kbd class="key-glyph">/</kbd></dt><dd>Search the filesystem</dd></div>
+          <div data-input="keys"><dt><kbd class="key-glyph">?</kbd></dt><dd>Show this page</dd></div>
         </dl>
       </section>
 
