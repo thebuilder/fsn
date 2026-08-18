@@ -774,7 +774,7 @@ function renderMatches(matches: SearchMatch[]): void {
     button.type = "button";
     button.id = `search-result-${index}`;
     button.role = "option";
-    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small></small></span><kbd>↵</kbd>`;
+    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small></small></span><kbd class="key-glyph">↵</kbd>`;
     const strong = button.querySelector("strong");
     if (strong) strong.textContent = node.name;
     const detail = button.querySelector("small");
