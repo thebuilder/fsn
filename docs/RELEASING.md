@@ -9,7 +9,7 @@ store any secret value.
 ## 1. Today's flow
 
 The tag-triggered release flow (validate → check → build → draft prerelease)
-is described in the [README's release section](../README.md#verification).
+is described in the [README's release section](../README.md#releasing).
 In short: `pnpm validate:desktop-release vX.Y.Z`, tag, push the tag, and
 `.github/workflows/release-desktop.yml` builds an unsigned, un-notarized
 Apple Silicon `.app`/`.dmg` and attaches it to a draft GitHub prerelease. The

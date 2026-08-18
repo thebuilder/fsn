@@ -2,9 +2,9 @@
   <img src="apps/desktop/src-tauri/icons/128x128@2x.png" alt="FSN icon" width="128" height="128" />
 </p>
 
-# FSN: 3D File System Navigator
+# FSN: File System Navigator
 
-A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a deterministic WebGL city. The web app is read-only; the Tauri desktop app can edit UTF-8 text and open files in their native application.
+A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a WebGL city — directories are districts, files are towers — and the layout is deterministic, so the same folder always looks the same. The web app is read-only; the Tauri desktop app can edit UTF-8 text and open files in their native application.
 
 ## Run locally
 
@@ -21,99 +21,34 @@ To run the native app, install the [Tauri prerequisites](https://v2.tauri.app/st
 pnpm dev:desktop
 ```
 
-## Workspace architecture
-
-FSN is a pnpm workspace with two deliberately separate application shells:
-
-| Workspace | Responsibility |
-| --- | --- |
-| `apps/web` | Browser filesystem adapter, remembered browser handles, Vercel Analytics, and web metadata. |
-| `apps/desktop` | Tauri v2 shell, native filesystem adapter, capabilities, Rust commands, and desktop packaging. |
-| `packages/core` | Platform-neutral filesystem model, classification, search, formatting, and parsers. |
-| `packages/app` | Shared navigator controller, WebGL scene, viewers, styles, shell markup, and demo assets. |
-
-[Turborepo](https://turborepo.com/docs) orchestrates and caches workspace tasks. Turbopack is intentionally not used here: it is the Next.js bundler, while FSN is a Vite application and [Tauri supports Vite directly](https://v2.tauri.app/start/frontend/vite/). This keeps web and desktop isolated without migrating the working app to Next.js.
-
 ## Controls
 
 - Drag to orbit; right-drag to pan; scroll to move through the world.
-- Use `W`, `A`, `S`, `D` or the arrow keys to move.
-- Click an object to inspect it; double-click a directory to enter it.
-- Press `Backspace` to return to the parent.
-- In the browser, back and forward retrace the directories you entered, and the address bar names the one you are in, so a reload returns to it.
+- Move with `W`, `A`, `S`, `D` or the arrow keys.
+- Click an object to inspect it; double-click a directory to enter it; `Backspace` returns to the parent.
 - Press `/` or `Cmd/Ctrl + K` to search the current directory.
-- Open objects in old-school viewer windows. In the browser, unknown or executable objects produce an access-denied screen, with a `FORCE HEX DUMP` override. On desktop, an object no viewer can show is handed to its native application instead, when the file policy allows it; refused objects get the access-denied screen.
+- The directory you are in is written into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off.
 
-## The address
-
-The directory you are in is written into the location fragment — `#/Macintosh HD/Documents/Field Notes` — so entering one is a history entry, back and forward walk the directories you walked, and a reload lands where you left off. A restored address is walked one level at a time, reading each, since a fresh tab has read nothing below the root; an address naming a directory that has since gone lands as deep as it still can and corrects itself.
-
-It is a fragment rather than a path because that is what it honestly is: a place inside the one page there has ever been, not a resource a server could return. Nothing has to be rewritten to serve it — not on the host, not in the Tauri asset protocol — and there remains a single canonical URL.
-
-The names are relative to whichever source is mounted, so an address is not a link anyone else can follow: it means something only alongside the folder this browser has already been granted. When a remembered folder comes back needing a click to re-grant it, the address is left naming that folder until it is mounted, so reloading again still restores the same place.
-
-## Object viewers
-
-Each viewer is loaded on demand, so a session only downloads the readers it uses.
-
-| Object | Viewer |
-| --- | --- |
-| UTF-8 text, source, Markdown/MDX, YAML, config, templates, logs | SimpleText pane with line numbers. Extensionless files (`Makefile`, `LICENSE`, known lockfiles, dotfiles) are recognised by name. |
-| Images | Canvas viewer with a real resampling pixel filter. Animated GIF/APNG/WebP are decoded frame by frame so the filter does not freeze them. |
-| 3D models (`.stl`, `.obj`, `.ply`, `.glb`, `.gltf`) | Orbitable mesh inspector with wireframe and spin toggles. |
-| Audio and video | Player with custom transport controls and switchable visualizers (see below). |
-| `.csv` / `.tsv` | Record sheet with a quoted-field reader and separator detection. |
-| `.json` | Collapsible tree with a raw-source toggle. |
-| `.zip` / `.jar` | Archive manifest read from the central directory. Nothing is extracted or executed. |
-| Fonts (`.ttf`, `.otf`, `.woff`, `.woff2`) | Specimen sheet at a range of sizes. |
-| `.pdf` | Embedded document reader. |
-| Anything else | Access-denied screen, with an optional hex dump of the first 64 KB. |
-
-## The sound player
-
-The browser's own media controls are switched off; the deck draws its own transport
-(play/pause, stop, seek, volume), which is keyboard operable — `Space` toggles play,
-arrows scrub, `Shift` + arrows scrub further.
-
-Playback starts on open where the browser permits it. Opening the object is itself a
-gesture, so it usually does; when it refuses, the deck waits and says so rather than
-falling back to muted autoplay, which would look like it was playing while producing
-silence.
-
-Audio opens onto one of three visualizers, all fed from a single `AnalyserNode`:
-
-- **GRID** — a synthwave landscape, driven by two separate things.
-
-  The spectrum is written one row at a time at the horizon into a scrolling height
-  texture, and travels toward you: the slow landscape. On its own it cannot feel like
-  the music, because at this road length and speed a ridge takes about seven seconds
-  to arrive. So each detected onset also fires a **shockwave** that crosses the whole
-  road in roughly four tenths of a second — that is what actually reads as being on
-  the beat, alongside the flash, the sun flare and the camera kick.
-
-  The grid is real geometry: line segments between neighbouring vertices of the
-  displaced lattice, not a `fract()` pattern painted onto a plane. The painted version
-  only agrees with the surface when the cell size happens to match the vertex spacing;
-  otherwise the lines float free and every ridge tears along a seam.
-- **BARS** — log-spaced spectrum with peak caps and a reflection.
-- **SCOPE** — oscilloscope with phosphor persistence.
-
-Video keeps the picture and gets a slim spectrum strip beneath it. Pausing lets the
-world settle, and `prefers-reduced-motion` slows the travel and drops the beat-driven
-camera kick. Seeking reseeds the terrain from the new position rather than zeroing it,
-since a buffer of silence meeting live audio puts a vertical cliff across the road.
+Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override — or, on desktop, is handed to its native application when the file policy allows it.
 
 ## Local files and privacy
 
-The **Open folder** control uses the File System Access API where available. Other browsers fall back to a `webkitdirectory` directory snapshot. Neither mode uploads filenames, metadata, or file contents; all rendering and previewing happens in the browser. The application never writes to selected files.
+Nothing is uploaded. The **Open folder** control uses the File System Access API where available, falling back to a `webkitdirectory` snapshot; all reading and rendering happens in the browser, and the web app never writes to a file. The address fragment holds directory names from the folder you opened, so analytics strips the fragment from every event before it is sent.
 
-The address holds directory names from the folder you opened. A fragment is never sent with a request, but analytics reports whatever `location.href` says, so a `beforeSend` hook cuts the fragment off every event before it is sent. There is one page and every address is a view of it, so the measurement loses nothing.
+The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root — there is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables; text edits save only after an explicit click, using atomic replacement.
 
-The desktop app asks Tauri for access only to a directory selected through the native picker. A Rust-owned active-root capability validates every native filesystem command; choosing another folder or returning to the demo revokes the old root. There is no static home-directory or global filesystem scope.
+## Workspace
 
-- **Open in native app** passes the selected file to a Rust command that resolves it lexically against the canonicalized granted root, rejecting `..` and absolute components, then relies on capability-scoped filesystem access to open it; symbolic links are refused. A regular file must clear an extension deny-list and, on Unix, must not be executable; on macOS an application bundle may be opened as itself.
-- **Text editing** accepts valid UTF-8 files, preserves BOM and line endings, saves only after an explicit click, warns about unsaved changes, checks content/identity snapshots immediately before saving, and uses atomic replacement to avoid partial writes.
-- Demo objects remain read-only and never receive native actions.
+FSN is a pnpm workspace with two deliberately separate application shells, orchestrated by [Turborepo](https://turborepo.com/docs).
+
+| Workspace | Responsibility |
+| --- | --- |
+| `apps/web` | Browser filesystem adapter, remembered browser handles, analytics, web metadata. |
+| `apps/desktop` | Tauri v2 shell, native filesystem adapter, capabilities, Rust commands, packaging. |
+| `packages/core` | Platform-neutral filesystem model, classification, search, formatting, parsers. |
+| `packages/app` | Shared navigator controller, WebGL scene, viewers, styles, shell markup, demo assets. |
+
+`CLAUDE.md` covers the conventions that hold across them. The shared demo model is generated; regenerate it with `node packages/app/tools/make-demo-model.mjs`.
 
 ## Verification
 
@@ -129,13 +64,9 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --locked --all-targets --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
 
-Create a local desktop bundle for the current operating system with:
+## Releasing
 
-```sh
-pnpm build:desktop
-```
-
-Push a version tag matching `apps/desktop/package.json` to create an unsigned Apple Silicon draft prerelease:
+`pnpm build:desktop` creates a local desktop bundle for the current operating system. Pushing a version tag matching `apps/desktop/package.json` creates an unsigned Apple Silicon draft prerelease:
 
 ```sh
 pnpm validate:desktop-release v0.1.0
@@ -143,11 +74,7 @@ git tag -a v0.1.0 -m "FSN desktop v0.1.0"
 git push origin v0.1.0
 ```
 
-The release workflow verifies the workspace and Rust backend before uploading the app and DMG. Signing and notarization remain separate release steps. The shared demo model is generated; regenerate it with:
-
-```sh
-node packages/app/tools/make-demo-model.mjs
-```
+The release workflow verifies the workspace and Rust backend before uploading the app and DMG. Signing and notarization remain separate steps.
 
 ## Credits
 
