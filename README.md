@@ -4,7 +4,7 @@
 
 # FSN: File System Navigator
 
-A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a WebGL city — directories are districts, files are towers — and the layout is deterministic, so the same folder always looks the same. The web app is read-only; the Tauri desktop app can edit UTF-8 text and open files in their native application.
+A web and desktop tribute to SGI's File System Navigator. It renders one directory at a time as a WebGL city, with directories as districts and files as towers. The layout is deterministic, so the same folder always looks the same. The web app is read-only. The Tauri desktop app can edit UTF-8 text and open files in their native application.
 
 ## Run locally
 
@@ -27,19 +27,19 @@ pnpm dev:desktop
 - Move with `W`, `A`, `S`, `D` or the arrow keys.
 - Click an object to inspect it; double-click a directory to enter it; `Backspace` returns to the parent.
 - Press `/` or `Cmd/Ctrl + K` to search the current directory.
-- The directory you are in is written into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off.
+- FSN writes the current directory into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off.
 
-Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override — or, on desktop, is handed to its native application when the file policy allows it.
+Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override. On desktop, the file policy can instead hand it to its native application.
 
 ## Local files and privacy
 
-Nothing is uploaded. The **Open folder** control uses the File System Access API where available, falling back to a `webkitdirectory` snapshot; all reading and rendering happens in the browser, and the web app never writes to a file. The address fragment holds directory names from the folder you opened, so analytics strips the fragment from every event before it is sent.
+Nothing is uploaded. The **Open folder** control uses the File System Access API where available and falls back to a `webkitdirectory` snapshot. All reading and rendering happens in the browser, and the web app never writes to a file. The address fragment holds directory names from the folder you opened, so analytics strips the fragment from every event before sending it.
 
-The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root — there is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables; text edits save only after an explicit click, using atomic replacement.
+The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root. There is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables. Text edits save only after an explicit click, using atomic replacement.
 
 ## Workspace
 
-FSN is a pnpm workspace with two deliberately separate application shells, orchestrated by [Turborepo](https://turborepo.com/docs).
+FSN is a pnpm workspace with two separate application shells, orchestrated by [Turborepo](https://turborepo.com/docs).
 
 | Workspace | Responsibility |
 | --- | --- |
@@ -82,4 +82,4 @@ The demo filesystem plays **"Vice"** from *White Bat XVII*.
 
 > Music by Karl Casey @ White Bat Audio: <https://karlcasey.bandcamp.com/album/white-bat-xvii>
 
-The credit travels with the file: it is shown in the sound player whenever the track is opened, and repeated in `Music/credits.txt` inside the demo filesystem.
+The credit travels with the file. The sound player shows it whenever the track is opened, and `Music/credits.txt` in the demo filesystem repeats it.
