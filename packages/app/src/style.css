@@ -299,9 +299,13 @@
   .swatch-document { --swatch: var(--blue); }
   .swatch-archive { --swatch: #e6de6d; }
 
-  /* The lenses sit on top of the legend they rewrite, as two rows of the same pressed-
-     button switch the search scope uses, so a lens reads as a setting of this panel
-     rather than as another toolbar. */
+  /* The lenses sit on top of the legend they rewrite, as two rows of one pressed-button
+     switch, so a lens reads as a setting of this panel rather than as another toolbar. */
+  .scope-switch { display: flex; gap: 1px; padding: 1px; background: var(--line); }
+  .scope-switch[hidden] { display: none; }
+  .scope-button { padding: 0.35rem 0.6rem; border: 0; background: #10201f; color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+  .scope-button:hover { color: #cfe6df; }
+  .scope-button[aria-pressed="true"] { background: rgba(134,250,221,.14); color: var(--phosphor); }
   .legend:has(.lens-controls) { width: 13.25rem; }
   .lens-controls { display: grid; gap: 0.45rem; margin-bottom: 0.8rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
   .lens-row { display: grid; grid-template-columns: 3.3rem minmax(0, 1fr); align-items: center; gap: 0.4rem; }
