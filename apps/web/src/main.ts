@@ -17,11 +17,13 @@ import {
   rootFromFileList,
 } from "./filesystem";
 import { directoryPermission, forgetSource, recallSource, rememberSource } from "./recent";
+import { recoverFromStaleBuilds } from "./stale-build";
 
 inject({
   mode: import.meta.env.PROD ? "production" : "development",
   beforeSend: stripFragment,
 });
+recoverFromStaleBuilds();
 
 const platform: NavigatorPlatform = {
   demoResources: {
