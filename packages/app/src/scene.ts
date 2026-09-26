@@ -11,6 +11,17 @@ import {
   type Decor,
   type Placement,
 } from "./layout";
+import {
+  createScanCage,
+  createScanDepthMaterial,
+  createScanUniforms,
+  installScan,
+  SCAN_COLOR,
+  scanPose,
+  solidReachesAt,
+  type CageBox,
+  type ScanUniforms,
+} from "./scan";
 
 type SceneCallbacks = {
   onSelect: (node: FsNode | null) => void;
@@ -41,11 +52,27 @@ type DirectoryArea = {
   /** 1 = fully lit active directory, 0 = dimmed background directory. */
   activation: number;
   activationTarget: number;
+  /** Present only on an area built to be revealed by the wireframe scan. */
+  scan?: AreaScan;
 };
 
+type AreaScan = {
+  uniforms: ScanUniforms;
+  /** Removed and freed the moment the scan ends; the shader hooks stay, switched off. */
+  cage: THREE.LineSegments | null;
+  /** Distance from the scan origin to the furthest corner of the district. */
+  reach: number;
+};
+
+/**
+ * A new district's reveal. Arriving in a filesystem is surveyed by the wireframe scan;
+ * walking into a directory within it raises the towers, which is quicker and keeps the
+ * scan an event rather than a toll paid on every double-click.
+ */
 type AreaIntro = {
   area: DirectoryArea;
   startedAt: number;
+  mode: "rise" | "scan";
 };
 
 type CameraFlight = {
@@ -297,6 +324,11 @@ const GRID_FRAGMENT_SHADER = /* glsl */ `
   uniform float uMajorSpacing;
   uniform float uFadeNear;
   uniform float uFadeFar;
+  uniform vec3 uScanOrigin;
+  uniform float uScanRadius;
+  uniform float uScanWidth;
+  uniform float uScanStrength;
+  uniform vec3 uScanColor;
   varying vec3 vWorldPosition;
   layout(location = 0) out vec4 fragColor;
 
@@ -312,8 +344,16 @@ const GRID_FRAGMENT_SHADER = /* glsl */ `
     float major = gridMask(vWorldPosition.xz, uMajorSpacing);
     float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, distance(vWorldPosition.xz, uCamera.xz));
     float alpha = max(minor * 0.32, major * 0.7) * fade;
+    vec3 color = mix(uMinorColor, uMajorColor, major);
+    // The scan front, where it meets the floor: the grid lines it crosses flare, and a
+    // faint wash marks the ring itself so it still reads between the lines.
+    if (uScanStrength > 0.0) {
+      float ring = exp(-abs(distance(vWorldPosition.xz, uScanOrigin.xz) - uScanRadius) / uScanWidth) * uScanStrength;
+      alpha = max(alpha, ring * 0.1) + max(minor, major) * ring * 0.8;
+      color = mix(color, uScanColor, min(ring * 1.5, 1.0));
+    }
     if (alpha < 0.002) discard;
-    fragColor = vec4(mix(uMinorColor, uMajorColor, major), alpha);
+    fragColor = vec4(color, alpha);
   }
 `;
 
@@ -510,7 +550,8 @@ export class WorldScene {
       const reclaimed = this.invalidatedCenter?.id === directory.id ? this.invalidatedCenter.center : null;
       this.invalidatedCenter = null;
       const center = reclaimed ?? (direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius));
-      area = this.createArea(directory.id, center, layout);
+      const scan = direction === "initial" && layout.placements.length > 0 && !prefersReducedMotion();
+      area = this.createArea(directory.id, center, layout, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
       isNew = true;
@@ -545,7 +586,10 @@ export class WorldScene {
     this.areas.delete(directoryId);
     this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
 
-    if (this.intro?.area === area) this.intro = null;
+    if (this.intro?.area === area) {
+      this.intro = null;
+      this.gridMaterial.uniforms.uScanStrength.value = 0;
+    }
     if (this.pendingArea === area) this.pendingArea = null;
     if (this.currentArea === area) this.currentArea = null;
     if (this.hoverTarget && area.placements.includes(this.hoverTarget)) this.hoverTarget = null;
@@ -569,7 +613,7 @@ export class WorldScene {
     }
   }
 
-  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout): DirectoryArea {
+  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout, scanned = false): DirectoryArea {
     const group = new THREE.Group();
     group.userData.directoryArea = id;
     const placements = layout.placements;
@@ -696,12 +740,49 @@ export class WorldScene {
     materials.push(beacon.material);
     group.add(beacon);
 
+    const scan = scanned ? this.prepareScan(center, layout, group, materials, [rim, ground]) : undefined;
+
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
     return {
       id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
       placements, decorMeshes, pickMeshes, materials, labels,
-      activation: 1, activationTarget: 1,
+      activation: 1, activationTarget: 1, scan,
     };
+  }
+
+  /**
+   * Hooks every material of a freshly built district into one set of scan uniforms and
+   * lays the wire cage over it. Has to happen before the district's first frame: the
+   * hooks are compiled into the shaders, and a district drawn once without them would
+   * flash whole before the scan began.
+   */
+  private prepareScan(
+    center: THREE.Vector3,
+    layout: AreaLayout,
+    group: THREE.Group,
+    materials: THREE.Material[],
+    slabs: THREE.Mesh[],
+  ): AreaScan {
+    const halfWidth = layout.groundWidth / 2 + RIM_OVERHANG;
+    const halfDepth = layout.groundDepth / 2 + RIM_OVERHANG;
+    const origin = new THREE.Vector3(center.x, GROUND_TOP, center.z);
+    const reach = Math.hypot(halfWidth, halfDepth, layout.peakHeight);
+    const uniforms = createScanUniforms(origin, reach);
+    materials.forEach((material) => installScan(material, uniforms));
+
+    const depthMaterial = createScanDepthMaterial(uniforms);
+    group.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.castShadow) object.customDepthMaterial = depthMaterial;
+    });
+
+    const boxes: CageBox[] = slabs.map((slab) => ({ position: slab.position, scale: slab.scale }));
+    layout.placements.forEach((placement) => {
+      boxes.push({ position: placement.position, scale: placement.scale });
+      placement.decor.forEach((decor) => boxes.push({ position: decor.position, scale: decor.scale }));
+    });
+    const cage = createScanCage(boxes, uniforms);
+    group.add(cage);
+    return { uniforms, cage, reach };
   }
 
   /**
@@ -1030,7 +1111,7 @@ export class WorldScene {
     toPosition: THREE.Vector3,
     options: { duration?: number; ease?: (progress: number) => number; interruptible?: boolean } = {},
   ): void {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (prefersReducedMotion()) {
       this.flight = null;
       this.camera.position.copy(toPosition);
       this.controls.target.copy(toTarget);
@@ -1095,8 +1176,8 @@ export class WorldScene {
   private startIntro(area: DirectoryArea): void {
     if (this.intro) this.finishIntro();
     if (!area.placements.length) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    this.intro = { area, startedAt: performance.now() };
+    if (prefersReducedMotion()) return;
+    this.intro = { area, startedAt: performance.now(), mode: area.scan ? "scan" : "rise" };
     area.labels.forEach((label) => (label.material.userData.introFade = 0));
     this.applyIntro(0);
   }
@@ -1105,6 +1186,7 @@ export class WorldScene {
   private applyIntro(elapsed: number): boolean {
     const intro = this.intro;
     if (!intro) return true;
+    if (intro.mode === "scan" && intro.area.scan) return this.applyScan(intro.area, intro.area.scan, elapsed);
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
@@ -1151,10 +1233,55 @@ export class WorldScene {
     return settled;
   }
 
+  /**
+   * The scan's frame: the towers already stand at full height and only the front moves.
+   * A label waits for the solid front to reach the object it names, so names never
+   * float over lots the survey has not found yet.
+   */
+  private applyScan(area: DirectoryArea, scan: AreaScan, elapsed: number): boolean {
+    const pose = scanPose(elapsed, scan.reach);
+    const { uniforms } = scan;
+    uniforms.uScanRadius.value = pose.radius;
+    uniforms.uWireOpacity.value = pose.wire;
+
+    const grid = this.gridMaterial.uniforms;
+    grid.uScanOrigin.value.copy(uniforms.uScanOrigin.value);
+    grid.uScanRadius.value = pose.radius;
+    grid.uScanWidth.value = uniforms.uScanRim.value;
+    grid.uScanStrength.value = pose.wire;
+
+    const origin = uniforms.uScanOrigin.value;
+    const fadeSpan = scan.reach * 0.12;
+    area.labels.forEach((label) => {
+      const placement = label.userData.placement as Placement;
+      const arrival = solidReachesAt(placement.position.distanceTo(origin), scan.reach);
+      label.material.userData.introFade = THREE.MathUtils.clamp((pose.radius - arrival) / fadeSpan, 0, 1);
+    });
+    return pose.done;
+  }
+
+  /** Switches the scan off for good: the shader hooks stay compiled but stand down. */
+  private endScan(scan: AreaScan): void {
+    scan.uniforms.uScanEnabled.value = 0;
+    scan.uniforms.uWireOpacity.value = 0;
+    this.gridMaterial.uniforms.uScanStrength.value = 0;
+    if (!scan.cage) return;
+    scan.cage.removeFromParent();
+    scan.cage.geometry.dispose();
+    (scan.cage.material as THREE.Material).dispose();
+    scan.cage = null;
+  }
+
   /** Snaps every object to its final pose and ends the reveal. */
   private finishIntro(): void {
     const intro = this.intro;
     if (!intro) return;
+    if (intro.mode === "scan" && intro.area.scan) {
+      this.endScan(intro.area.scan);
+      intro.area.labels.forEach((label) => (label.material.userData.introFade = 1));
+      this.intro = null;
+      return;
+    }
     const matrix = new THREE.Matrix4();
     const rotation = new THREE.Quaternion();
     intro.area.placements.forEach((placement) => {
@@ -1228,6 +1355,11 @@ export class WorldScene {
         uMajorSpacing: { value: 27 },
         uFadeNear: { value: 70 },
         uFadeFar: { value: 470 },
+        uScanOrigin: { value: new THREE.Vector3() },
+        uScanRadius: { value: 0 },
+        uScanWidth: { value: 1 },
+        uScanStrength: { value: 0 },
+        uScanColor: { value: new THREE.Color(SCAN_COLOR) },
       },
       vertexShader: GRID_VERTEX_SHADER,
       fragmentShader: GRID_FRAGMENT_SHADER,
@@ -1280,6 +1412,7 @@ export class WorldScene {
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
+    this.gridMaterial.uniforms.uScanStrength.value = 0;
     this.hoverTarget = null;
     this.hoverShown = null;
     this.hoverStrength = 0;
@@ -1301,6 +1434,8 @@ export class WorldScene {
     object.traverse((descendant) => {
       if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
       if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
+      // Shared by every caster in a scanned district; disposing it twice is harmless.
+      if (descendant instanceof THREE.Mesh) descendant.customDepthMaterial?.dispose();
       const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
       materials.forEach((material) => {
         const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
@@ -1719,6 +1854,10 @@ export class WorldScene {
     this.glowTexture.dispose();
     this.renderer.dispose();
   }
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 const TURN_OFFSET = new THREE.Vector3();
