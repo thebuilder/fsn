@@ -1,8 +1,10 @@
 mod commands;
 mod file_policy;
+mod git_status;
 mod grant;
 #[cfg(target_os = "macos")]
 mod macos_quit;
+mod measure;
 mod text_edit;
 
 use commands::*;
@@ -27,6 +29,8 @@ pub fn run() {
             pick_root,
             clear_active_root,
             read_dir_native,
+            measure_dir_native,
+            git_status_native,
             read_file_native,
             read_text_native,
             write_text_atomic,

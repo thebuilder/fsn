@@ -11,6 +11,8 @@
     "allow-pick-root",
     "allow-clear-active-root",
     "allow-read-dir-native",
+    "allow-measure-dir-native",
+    "allow-git-status-native",
     "allow-read-file-native",
     "allow-read-text-native",
     "allow-write-text-atomic",

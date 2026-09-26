@@ -15,6 +15,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 cap-std = "=4.0.2"
+gix = { version = "=0.88.0", default-features = false, features = ["sha1", "status"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "=0.10.9"
 tauri = { version = "=2.11.5", features = [] }
