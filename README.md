@@ -29,13 +29,15 @@ pnpm dev:desktop
 - Press `/` or `Cmd/Ctrl + K` to search everything in the open folder. The first search indexes it in the background; picking a result flies to it.
 - FSN writes the current directory, and the object selected there, into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off, viewer window and all.
 
+The lens panel (bottom right, or behind the layers button on a narrow screen) changes what the city shows. **Size: Total** raises each folder by everything inside it, measured in the background. **Colour: Age** heats objects by how recently they changed. On desktop, **Colour: Git** appears when the folder is inside a git work tree and colours objects by their status. Your choice is remembered in this browser.
+
 Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override. On desktop, the file policy can instead hand it to its native application.
 
 ## Local files and privacy
 
 Nothing is uploaded. The **Open folder** control uses the File System Access API where available and falls back to a `webkitdirectory` snapshot. All reading and rendering happens in the browser, and the web app never writes to a file. The address fragment holds directory names from the folder you opened, so analytics strips the fragment from every event before sending it.
 
-The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root. There is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables. Text edits save only after an explicit click, using atomic replacement.
+The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root. There is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables. Text edits save only after an explicit click, using atomic replacement. Git status is read in-process with gitoxide at reduced trust, so a repository's hooks, fsmonitor and filter programs never run.
 
 ## Workspace
 

@@ -1,18 +1,35 @@
 import {
   categoryOf,
+  combineUsage,
+  createGitStatusIndex,
   formatBytes,
   formatDate,
+  formatUsage,
+  formatUsageBytes,
   indexChildren,
   locationOf,
   pathFor,
   searchIndex,
   sortNodes,
+  usageOfLoadedTree,
+  type DirectoryUsage,
   type FilesystemRoot,
   type FsNode,
+  type GitStatusIndex,
   type IndexedObject,
 } from "@fsn/core";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
+import {
+  createAgeLens,
+  createGitLens,
+  legendFor,
+  lensStorage,
+  readLensChoice,
+  writeLensChoice,
+  type ColourMode,
+  type LensChoice,
+} from "./lens";
 import { dismissOnOutsidePress } from "./light-dismiss";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
 import { readRoute, routeFor, sameObject, sameRoute, type Route, type RouteObject } from "./route";
@@ -68,6 +85,15 @@ const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
 const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
 const brandHome = getElement<HTMLAnchorElement>("brand-home");
+const lensButton = getElement<HTMLButtonElement>("lens-button");
+const lensPanel = getElement<HTMLElement>("lens-panel");
+const lensProgress = getElement<HTMLElement>("lens-progress");
+const legendTitle = getElement<HTMLElement>("legend-title");
+const legendList = getElement<HTMLUListElement>("legend-list");
+const sizeButtons = [...lensPanel.querySelectorAll<HTMLButtonElement>("[data-lens-size]")];
+const colourButtons = [...lensPanel.querySelectorAll<HTMLButtonElement>("[data-lens-colour]")];
+/** The type legend as the shell wrote it, restored whenever the type lens comes back. */
+const typeLegend = [...legendList.children].map((item) => item.cloneNode(true));
 
 // The hidden FileList fallback is a browser-only escape hatch. Keeping it focusable
 // in the native shell would expose an inert control to keyboard and screen-reader users.
@@ -108,6 +134,264 @@ const world = new WorldScene(canvas, {
   onSwapKeys: (swapped) => controls.classList.toggle("is-swapped", swapped),
   onEnterArea: adoptArea,
 });
+
+/**
+ * The lens a viewer last chose, applied before the first district is drawn so the city
+ * arrives already in it rather than being rebuilt a moment later. Everything a lens needs
+ * to know — totals, git status — belongs to the source on screen and is dropped with it.
+ */
+const lensStore = lensStorage();
+let lens: LensChoice = readLensChoice(lensStore);
+let gitIndex: GitStatusIndex | null = null;
+let appliedColour: ColourMode = "type";
+world.setDirectorySize(lens.size);
+
+/** The git lens is only offered, and only honoured, once there is a status to show. */
+function effectiveColour(): ColourMode {
+  return lens.colour === "git" && !gitIndex ? "type" : lens.colour;
+}
+
+/**
+ * Where a node lives below the open folder, as names, for matching against git's paths.
+ * Only directories that have been walked into are known here, which is every directory a
+ * district has been built for, so every object on screen has an answer.
+ */
+function pathBelowRoot(node: FsNode): string[] | null {
+  const own = node.kind === "directory" ? ancestryById.get(node.id) : undefined;
+  if (own) return own.slice(1).map((part) => part.name);
+  const parent = node.parentId ? ancestryById.get(node.parentId) : undefined;
+  return parent ? [...parent.slice(1).map((part) => part.name), node.name] : null;
+}
+
+function applyColourLens(force = false): void {
+  const mode = effectiveColour();
+  // Repainting relabels every name on screen, which is worth doing for new data but not
+  // for a choice that changed nothing.
+  if (mode === "type" && appliedColour === "type" && !force) {
+    renderLensControls();
+    return;
+  }
+  appliedColour = mode;
+  if (mode === "age") world.setColourLens(createAgeLens(Date.now()));
+  else if (mode === "git" && gitIndex) world.setColourLens(createGitLens(gitIndex, pathBelowRoot));
+  else world.setColourLens(null);
+  renderLegend();
+  renderLensControls();
+}
+
+function renderLensControls(): void {
+  const colour = effectiveColour();
+  sizeButtons.forEach((button) => (button.ariaPressed = String(button.dataset.lensSize === lens.size)));
+  colourButtons.forEach((button) => {
+    button.ariaPressed = String(button.dataset.lensColour === colour);
+    if (button.dataset.lensColour === "git") button.hidden = !gitIndex;
+  });
+}
+
+function renderLegend(): void {
+  const mode = effectiveColour();
+  if (mode === "type") {
+    legendTitle.textContent = "OBJECT TYPES";
+    legendList.replaceChildren(...typeLegend.map((item) => item.cloneNode(true)));
+    return;
+  }
+  const { title, rows } = legendFor(mode);
+  legendTitle.textContent = title;
+  const items = rows.map((row) => {
+    const item = document.createElement("li");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.style.setProperty("--swatch", `#${row.color.toString(16).padStart(6, "0")}`);
+    item.append(swatch, row.label);
+    return item;
+  });
+  if (mode === "git" && gitIndex?.truncated) {
+    const note = document.createElement("li");
+    note.className = "legend-note";
+    note.textContent = "Showing the first 20,000 changes";
+    items.push(note);
+  }
+  legendList.replaceChildren(...items);
+}
+
+function chooseSize(size: LensChoice["size"]): void {
+  if (lens.size === size) return;
+  lens = { ...lens, size };
+  writeLensChoice(lensStore, lens);
+  if (size === "total") fillLoadedTotals(currentChildren());
+  world.setDirectorySize(size);
+  renderLensControls();
+  measureCurrentDirectory();
+  setStatus(size === "total" ? "Folder heights show everything inside them" : "Folder heights show their own listing");
+}
+
+function chooseColour(colour: ColourMode): void {
+  lens = { ...lens, colour };
+  writeLensChoice(lensStore, lens);
+  // Git is read again each time it is asked for, since the work tree may have moved on.
+  if (colour === "git") void refreshGitStatus();
+  applyColourLens();
+  if (selectedNode) updateSelection(selectedNode);
+}
+
+let gitRequest = 0;
+
+/** Reads the open folder's git status, if the platform can and the folder is in a work tree. */
+async function refreshGitStatus(): Promise<void> {
+  const request = (gitRequest += 1);
+  const source = filesystem;
+  let index: GitStatusIndex | null = null;
+  if (platform.gitStatus && source.isLocal) {
+    try {
+      const report = await platform.gitStatus(source);
+      index = report ? createGitStatusIndex(report) : null;
+    } catch (error) {
+      if (request === gitRequest && lens.colour === "git") {
+        setStatus(error instanceof Error ? error.message : "Git status is unavailable", true);
+      }
+    }
+  }
+  if (request !== gitRequest || source !== filesystem || lifecycle.signal.aborted) return;
+  gitIndex = index;
+  applyColourLens(effectiveColour() === "git");
+  if (selectedNode) updateSelection(selectedNode);
+}
+
+let lensOpen = false;
+
+/** Unfolds the panel under the toolbar on a narrow screen; on a wide one it never folds. */
+function setLensOpen(open: boolean): void {
+  lensOpen = open;
+  document.documentElement.toggleAttribute("data-lens-open", open);
+  lensButton.setAttribute("aria-expanded", String(open));
+}
+
+/** How often a long measurement lays its district out again with the totals so far. */
+const MEASURE_REFRESH_INTERVAL = 1200;
+/** Progress text is a courtesy; rewriting it faster than this is layout work for nothing. */
+const MEASURE_PROGRESS_INTERVAL = 150;
+let measuring: AbortController | null = null;
+let measuringId: string | null = null;
+/** Directories that could not be measured on this source, so a render does not retry them forever. */
+const unmeasurable = new Set<string>();
+
+/** How much of an in-memory tree is counted on the spot, before a layout, per folder. */
+const LOADED_TOTAL_LIMIT = 50_000;
+
+/**
+ * Totals the folders whose whole tree is already in memory — every folder of the demo, or
+ * of a snapshot import — before the district is laid out, so it is built at its final
+ * heights instead of rising flat and being rebuilt a moment later. Anything that would
+ * need a read is left to `measureCurrentDirectory`.
+ */
+function fillLoadedTotals(children: FsNode[]): void {
+  for (const node of children) {
+    if (node.kind !== "directory" || node.usage || !node.children) continue;
+    const usage = usageOfLoadedTree(node, LOADED_TOTAL_LIMIT);
+    if (usage.complete) node.usage = usage;
+  }
+}
+
+function measureUsage(node: FsNode, signal: AbortSignal, onProgress: (usage: DirectoryUsage) => void): Promise<DirectoryUsage> {
+  // The demo lives wholly in memory, so totalling it needs nothing from the platform.
+  if (filesystem.isLocal && platform.measureDirectory) return platform.measureDirectory(node, signal, onProgress);
+  return Promise.resolve(usageOfLoadedTree(node));
+}
+
+function showMeasuring(text: string | null): void {
+  lensProgress.hidden = text === null;
+  lensProgress.textContent = text ?? "";
+  document.documentElement.toggleAttribute("data-measuring", text !== null);
+}
+
+/**
+ * Totals every folder standing in the current district, one after another, while the
+ * size lens asks for totals. Each walk is the platform's to bound and to run off the
+ * frame; this only sequences them, lays the district out again as totals land, and
+ * abandons the lot the moment the view moves on to another directory or source.
+ */
+function measureCurrentDirectory(): void {
+  measuring?.abort();
+  measuring = null;
+  measuringId = null;
+  if (lens.size !== "total" || lifecycle.signal.aborted) {
+    showMeasuring(null);
+    return;
+  }
+  const directory = currentDirectory();
+  const source = filesystem;
+  const pending = currentChildren().filter((node) => node.kind === "directory" && !node.usage && !unmeasurable.has(node.id));
+  if (!pending.length) {
+    showMeasuring(null);
+    settleDirectoryTotal(directory);
+    return;
+  }
+  const controller = new AbortController();
+  measuring = controller;
+  const { signal } = controller;
+  const stillWanted = (): boolean => !signal.aborted && source === filesystem && !lifecycle.signal.aborted;
+  void (async () => {
+    let lastRefresh = performance.now();
+    let lastProgress = 0;
+    let measuredBytes = 0;
+    let dirty = false;
+    for (const [index, node] of pending.entries()) {
+      const step = `Measuring ${index + 1}/${pending.length}`;
+      showMeasuring(`${step} · ${formatBytes(measuredBytes)}`);
+      measuringId = node.id;
+      if (selectedNode?.id === node.id) updateSelection(selectedNode);
+      try {
+        const usage = await measureUsage(node, signal, (partial) => {
+          const now = performance.now();
+          if (now - lastProgress < MEASURE_PROGRESS_INTERVAL || !stillWanted()) return;
+          lastProgress = now;
+          showMeasuring(`${step} · ${formatBytes(measuredBytes + partial.bytes)}`);
+        });
+        if (!stillWanted()) return;
+        node.usage = usage;
+        measuredBytes += usage.bytes;
+        dirty = true;
+      } catch {
+        if (!stillWanted()) return;
+        unmeasurable.add(node.id);
+      }
+      if (selectedNode?.id === node.id) updateSelection(selectedNode);
+      if (dirty && performance.now() - lastRefresh > MEASURE_REFRESH_INTERVAL) {
+        world.refreshArea(directory.id);
+        dirty = false;
+        lastRefresh = performance.now();
+      }
+    }
+    if (measuring !== controller) return;
+    measuring = null;
+    measuringId = null;
+    if (dirty) world.refreshArea(directory.id);
+    showMeasuring(null);
+    settleDirectoryTotal(directory);
+  })();
+}
+
+/**
+ * Once every folder in it is measured, the directory itself has a total for free: its
+ * own files plus theirs. It is kept, so the district one level up can raise this
+ * directory's plot without walking it again.
+ */
+function settleDirectoryTotal(directory: FsNode): void {
+  if (!directory.usage && directory.children) {
+    directory.usage = combineUsage(directory.children);
+    if (directory.parentId) world.refreshArea(directory.parentId);
+  }
+  if (currentDirectory().id === directory.id) renderChrome();
+  if (selectedNode) updateSelection(selectedNode);
+  // The newest change beneath each folder arrives with its total, and age reads it.
+  if (effectiveColour() === "age") applyColourLens(true);
+}
+
+function describeTotal(node: FsNode): string {
+  if (node.usage) return formatUsage(node.usage);
+  if (measuringId === node.id) return "Measuring…";
+  return lens.size === "total" && !unmeasurable.has(node.id) ? "Waiting to measure" : "Not measured";
+}
 
 function currentDirectory(): FsNode {
   return ancestry[ancestry.length - 1];
@@ -230,7 +514,8 @@ function renderChrome(): void {
   directoryTitle.textContent = current.name;
   const directories = children.filter((node) => node.kind === "directory").length;
   const files = children.length - directories;
-  directorySummary.textContent = `${children.length} objects · ${directories} ${directories === 1 ? "directory" : "directories"} · ${files} ${files === 1 ? "file" : "files"}`;
+  const total = current.usage ? ` · ${formatUsageBytes(current.usage)} in all` : "";
+  directorySummary.textContent = `${children.length} objects · ${directories} ${directories === 1 ? "directory" : "directories"} · ${files} ${files === 1 ? "file" : "files"}${total}`;
   renderBreadcrumbs();
   if (renderedDirectoryId !== current.id) {
     renderedDirectoryId = current.id;
@@ -335,9 +620,11 @@ async function renderDirectory(
   // drawing. adoptArea already wrote its own entry for whatever the camera actually
   // settled on, so an abandoned render reaching this line would otherwise double it.
   syncRoute(route);
+  if (lens.size === "total") fillLoadedTotals(children);
 
   try {
     world.setDirectory(current, children, direction);
+    measureCurrentDirectory();
   } catch (error) {
     // The chrome (breadcrumbs, address) has already committed to this directory; absorb
     // a layout failure here so the app keeps working instead of leaving the 3D world
@@ -361,6 +648,7 @@ function adoptArea(directoryId: string): void {
   renderChrome();
   updateSelection(null);
   setStatus(`Entered ${currentDirectory().name}`);
+  measureCurrentDirectory();
 }
 
 let previousCrumbIds: string[] = [];
@@ -421,6 +709,12 @@ function updateSelection(node: FsNode | null): void {
     [node.kind === "directory" ? "Objects" : "Size", node.kind === "directory" ? String(node.children?.length ?? "Not scanned") : formatBytes(node.size)],
     ["Modified", formatDate(node.modified)],
   ];
+  if (node.kind === "directory") metadata.splice(2, 0, ["Total", describeTotal(node)]);
+  if (effectiveColour() === "git" && gitIndex) {
+    const segments = pathBelowRoot(node);
+    const state = segments ? gitIndex.stateAt(segments, node.kind) : null;
+    if (state) metadata.push(["Git", state.charAt(0).toUpperCase() + state.slice(1)]);
+  }
   metadata.forEach(([term, description]) => {
     const row = document.createElement("div");
     const dt = document.createElement("dt");
@@ -611,6 +905,10 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
       heldObject = null;
       ancestry = landing?.chain ?? [candidate.root];
       ancestryById.clear();
+      // Totals and status belong to the source they were read from.
+      unmeasurable.clear();
+      gitIndex = null;
+      void refreshGitStatus();
       const drawn = renderDirectory(!announcement, "initial", "replace");
       if (announcement) setStatus(announcement);
       return { status: "activated", previous, settled: drawn };
@@ -1058,7 +1356,24 @@ function releaseWhenWelcomeHasGone(): void {
   failsafe = window.setTimeout(release, 400);
 }
 
+sizeButtons.forEach((button) => button.addEventListener("click", () => chooseSize(button.dataset.lensSize === "total" ? "total" : "own"), listener));
+colourButtons.forEach((button) => button.addEventListener("click", () => {
+  const colour = button.dataset.lensColour;
+  chooseColour(colour === "age" || colour === "git" ? colour : "type");
+}, listener));
+lensButton.addEventListener("click", () => setLensOpen(!lensOpen), listener);
+// Touching the view is going back to it, so the folded panel gets out of the way.
+canvas.addEventListener("pointerdown", () => lensOpen && setLensOpen(false), listener);
+applyColourLens();
+void refreshGitStatus();
+
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && lensOpen && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    setLensOpen(false);
+    lensButton.focus();
+    return;
+  }
   // Camera movement keys are owned by WorldScene; it reports back via onKeyboardNavigation.
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
@@ -1207,6 +1522,9 @@ return {
     document.documentElement.removeAttribute("data-selection");
     sourceTransition.invalidate();
     renderGeneration += 1;
+    measuring?.abort();
+    document.documentElement.removeAttribute("data-measuring");
+    document.documentElement.removeAttribute("data-lens-open");
     viewer.destroy();
     world.destroy();
     destroyPromise = sourceTransition.dispose(filesystem);

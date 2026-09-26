@@ -1,11 +1,16 @@
 import {
   DIRECTORY_PEEK_LIMIT,
   categoryOf,
+  measureTree,
+  peekFromChildren,
   sortNodes,
+  usageOfLoadedTree,
   type DirectoryPeek,
+  type DirectoryUsage,
   type FilesystemRoot,
   type FsNode,
   type FsResource,
+  type MeasuredEntry,
 } from "@fsn/core";
 
 export * from "@fsn/core";
@@ -155,17 +160,14 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   if (node.kind !== "directory") return { total: 0, categories: [] };
 
   if (node.children) {
-    node.peek = {
-      total: node.children.length,
-      categories: node.children.slice(0, DIRECTORY_PEEK_LIMIT).map(categoryOf),
-    };
+    node.peek = peekFromChildren(node.children);
     return node.peek;
   }
 
   const inFlight = peekInFlight.get(node.id);
   if (inFlight) return inFlight;
   const read = (async () => {
-    const peek: DirectoryPeek = { total: 0, categories: [] };
+    const peek: DirectoryPeek = { total: 0, categories: [], names: [] };
     const handle = directoryHandleFor(node);
     if (handle) {
       try {
@@ -174,6 +176,7 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
           peek.total += 1;
           if (peek.categories.length < DIRECTORY_PEEK_LIMIT) {
             peek.categories.push(categoryOf({ id: name, parentId: node.id, name, kind: childHandle.kind }));
+            peek.names?.push(name);
           }
         }
       } catch {
@@ -189,6 +192,69 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   } finally {
     peekInFlight.delete(node.id);
   }
+}
+
+/**
+ * Entries a browser measurement visits before it settles for a lower bound. Lower than
+ * the desktop's, because every file costs a `getFile()` round trip through the browser
+ * rather than a stat.
+ */
+const MEASURE_ENTRY_LIMIT = 120_000;
+/** Directories listed at once, each with its own pool of `getFile()` calls below. */
+const MEASURE_DIRECTORY_CONCURRENCY = 4;
+const MEASURE_FILE_CONCURRENCY = 8;
+
+/**
+ * Totals everything beneath a directory for the disk-usage lens.
+ *
+ * A picked folder is walked through its handles in the background: every step is an
+ * await on the browser, so the frame keeps running between them, and the pools keep the
+ * number of reads in flight bounded however wide the tree is. A snapshot import already
+ * holds every file in memory, so it is simply counted.
+ */
+export function measureDirectory(
+  node: FsNode,
+  signal: AbortSignal,
+  onProgress?: (usage: DirectoryUsage) => void,
+): Promise<DirectoryUsage> {
+  const handle = directoryHandleFor(node);
+  if (!handle) return Promise.resolve(usageOfLoadedTree(node));
+  return measureTree(handle, listForMeasure, {
+    signal,
+    concurrency: MEASURE_DIRECTORY_CONCURRENCY,
+    entryLimit: MEASURE_ENTRY_LIMIT,
+    onProgress,
+  });
+}
+
+async function listForMeasure(
+  handle: FileSystemDirectoryHandle,
+  signal?: AbortSignal,
+): Promise<MeasuredEntry<FileSystemDirectoryHandle>[]> {
+  const entries: MeasuredEntry<FileSystemDirectoryHandle>[] = [];
+  const files: FileSystemFileHandle[] = [];
+  for await (const [, child] of (handle as DirectoryHandleWithEntries).entries()) {
+    signal?.throwIfAborted();
+    if (child.kind === "directory") entries.push({ kind: "directory", directory: child as FileSystemDirectoryHandle });
+    else files.push(child as FileSystemFileHandle);
+  }
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < files.length) {
+      signal?.throwIfAborted();
+      const file = files[next];
+      next += 1;
+      try {
+        const read = await file.getFile();
+        entries.push({ kind: "file", size: read.size, modified: read.lastModified });
+      } catch {
+        // Counted, but without a size the total becomes a lower bound.
+        entries.push({ kind: "file" });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MEASURE_FILE_CONCURRENCY, files.length) }, worker));
+  return entries;
 }
 
 /** Resolves file metadata a pool at a time: one slow handle stalls its slot, not the directory. */

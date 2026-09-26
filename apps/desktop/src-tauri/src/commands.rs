@@ -11,8 +11,9 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
-    file_policy,
+    file_policy, git_status,
     grant::ActiveRoot,
+    measure::{self, DirectoryUsage},
     text_edit::{self, FileSnapshot, ReadTextResult, WriteTextResult},
 };
 
@@ -83,6 +84,35 @@ pub async fn read_dir_native(
     tauri::async_runtime::spawn_blocking(move || read_directory(&dir, &display))
         .await
         .map_err(|_| "The directory read did not complete".to_string())?
+}
+
+/// Totals everything beneath a directory for the disk-usage lens. The path is validated
+/// against the active root like any other read, and the walk itself runs on a blocking
+/// worker so a large tree never holds up the IPC thread.
+#[tauri::command]
+pub async fn measure_dir_native(
+    root: State<'_, ActiveRoot>,
+    path: PathBuf,
+) -> Result<DirectoryUsage, String> {
+    let (dir, _) = root.directory(&path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        measure::measure(dir, measure::MAX_MEASURED_ENTRIES)
+    })
+    .await
+    .map_err(|_| "The directory measurement did not complete".to_string())
+}
+
+/// Git status for the colour lens. Takes no path from the webview at all: the only
+/// place it starts from is the active root Rust already holds. See `git_status` for why
+/// this is read in-process rather than by running `git`.
+#[tauri::command]
+pub async fn git_status_native(
+    root: State<'_, ActiveRoot>,
+) -> Result<Option<git_status::GitStatusReport>, String> {
+    let display = root.root(|_, display| Ok(display.to_path_buf()))?;
+    tauri::async_runtime::spawn_blocking(move || git_status::read_status(&display))
+        .await
+        .map_err(|_| "The repository status did not complete".to_string())?
 }
 
 #[tauri::command]

@@ -33,6 +33,8 @@ export type Placement = {
 /** One preview marker on a directory plot. Decoration only: not selectable, not a node. */
 export type Decor = {
   category: FileCategory;
+  /** Which of the plot's children this stands for, as its position in the directory's peek. */
+  index: number;
   position: THREE.Vector3;
   scale: THREE.Vector3;
   mesh?: THREE.InstancedMesh;
@@ -46,6 +48,17 @@ export type AreaLayout = {
   groundDepth: number;
   /** Top of the tallest thing standing here, including its label. */
   peakHeight: number;
+};
+
+/**
+ * What a directory plot's height answers. `own` keeps every plot the same low slab, as a
+ * folder's own listing says nothing about how much sits beneath it; `total` raises each
+ * one by the bytes in its whole subtree, once something has measured them.
+ */
+export type DirectorySize = "own" | "total";
+
+export type LayoutOptions = {
+  directorySize?: DirectorySize;
 };
 
 /** The district floor: one slab per directory, with everything inside standing on it. */
@@ -87,7 +100,17 @@ const LABEL_LANE_CYCLE = 3;
 
 /** A directory is a low plot of land carrying one marker per child. */
 const PLOT_HEIGHT = 0.62;
-const PLOT_TOP = GROUND_TOP + PLOT_HEIGHT;
+/**
+ * A measured plot grows from its usual slab by the log of its total, on a scale of its
+ * own. Towers saturate at a few megabytes, which is right for a single file and useless
+ * for a folder: nearly every folder worth looking at would stand at the cap. This one
+ * spends its range on the orders of magnitude folders actually span, from a kilobyte of
+ * notes to a disk's worth of video, and stays clear of the ceiling below the tens of
+ * gigabytes.
+ */
+const PLOT_TOTAL_UNIT = 256 * 1024;
+const PLOT_TOTAL_STEP = 0.42;
+const PLOT_TOTAL_MAX = 8;
 const PLOT_PADDING = 1.05;
 const PLOT_MIN_WIDTH = 4.2;
 const MARKER_CELL = 1;
@@ -120,7 +143,7 @@ function maxOf<T>(items: readonly T[], value: (item: T) => number, floor: number
 }
 
 type Footprint = { width: number; depth: number };
-type Marker = { category: FileCategory; x: number; z: number };
+type Marker = { category: FileCategory; index: number; x: number; z: number };
 type Box = Footprint & { node: FsNode; height: number; markers: Marker[] };
 /** `lane` counts steps back and along from the front left of the pack, for label stacking. */
 type Placed<T> = { item: T; x: number; z: number; lane: number };
@@ -198,13 +221,26 @@ export function towerBox(node: FsNode): Box {
   };
 }
 
+/** How tall a plot stands once its whole subtree has been measured. */
+export function plotHeightForTotal(bytes: number): number {
+  return THREE.MathUtils.clamp(
+    PLOT_HEIGHT + Math.log2(1 + Math.max(0, bytes) / PLOT_TOTAL_UNIT) * PLOT_TOTAL_STEP,
+    PLOT_HEIGHT,
+    PLOT_TOTAL_MAX,
+  );
+}
+
 /**
  * A directory is a plot of land: its area grows with how much it holds, and it carries
  * one marker per child, coloured by that child's type. The markers are all the same
  * height on purpose — sizes inside a directory are not known without opening every file
  * in it, and a varied skyline would be encoding data that was never read.
+ *
+ * Asked for its `total`, the plot itself rises instead, by the bytes beneath it, once a
+ * measurement has put them on the node. Until then it keeps its usual height rather
+ * than guessing, so an unmeasured plot reads as flat, not as small.
  */
-export function plotBox(node: FsNode): Box {
+export function plotBox(node: FsNode, size: DirectorySize = "own"): Box {
   const peek = node.peek;
   const total = peek?.total ?? node.children?.length ?? 0;
   const columns = THREE.MathUtils.clamp(Math.round(Math.sqrt(total)), 1, MARKER_MAX_COLUMNS);
@@ -215,6 +251,7 @@ export function plotBox(node: FsNode): Box {
   for (let index = 0; index < shown; index += 1) {
     markers.push({
       category: peek?.categories[index] ?? "unknown",
+      index,
       x: ((index % columns) - (columns - 1) / 2) * MARKER_CELL,
       z: (Math.floor(index / columns) - (rows - 1) / 2) * MARKER_CELL,
     });
@@ -224,25 +261,28 @@ export function plotBox(node: FsNode): Box {
     node,
     width: Math.max(PLOT_MIN_WIDTH, columns * MARKER_CELL + PLOT_PADDING * 2),
     depth: Math.max(PLOT_MIN_WIDTH * 0.8, rows * MARKER_CELL + PLOT_PADDING * 2),
-    height: PLOT_HEIGHT,
+    height: size === "total" && node.usage ? plotHeightForTotal(node.usage.bytes) : PLOT_HEIGHT,
     markers,
   };
 }
 
 function toPlacement(box: Box, x: number, z: number, labelLift: number): Placement {
+  // Markers stand on whatever the plot's top is, which a measured total can raise.
+  const plotTop = GROUND_TOP + box.height;
   const decor = box.markers.map((marker) => ({
     category: marker.category,
-    position: new THREE.Vector3(x + marker.x, PLOT_TOP + MARKER_HEIGHT / 2, z + marker.z),
+    index: marker.index,
+    position: new THREE.Vector3(x + marker.x, plotTop + MARKER_HEIGHT / 2, z + marker.z),
     scale: new THREE.Vector3(MARKER_FOOTPRINT, MARKER_HEIGHT, MARKER_FOOTPRINT),
   }));
-  const outlineHeight = box.markers.length ? PLOT_HEIGHT + MARKER_HEIGHT : box.height;
+  const outlineHeight = box.markers.length ? box.height + MARKER_HEIGHT : box.height;
   return {
     node: box.node,
     position: new THREE.Vector3(x, GROUND_TOP + box.height / 2, z),
     scale: new THREE.Vector3(box.width, box.height, box.depth),
     outlinePosition: new THREE.Vector3(x, GROUND_TOP + outlineHeight / 2, z),
     outlineScale: new THREE.Vector3(box.width, outlineHeight, box.depth),
-    labelY: labelLift + (box.markers.length ? PLOT_TOP + MARKER_HEIGHT + 0.95 : GROUND_TOP + box.height + 0.82),
+    labelY: labelLift + (box.markers.length ? plotTop + MARKER_HEIGHT + 0.95 : plotTop + 0.82),
     labelLift,
     introDelay: 0,
     decor,
@@ -256,7 +296,7 @@ function toPlacement(box: Box, x: number, z: number, labelLift: number): Placeme
  * than as scattered confetti — and so a plot's size is the only thing on screen that
  * varies with what a directory actually holds.
  */
-export function buildLayout(nodes: FsNode[]): AreaLayout {
+export function buildLayout(nodes: FsNode[], options: LayoutOptions = {}): AreaLayout {
   if (!nodes.length) return { placements: [], radius: 16, groundWidth: 22, groundDepth: 18, peakHeight: 2 };
 
   const byCategory = new Map<FileCategory, FsNode[]>();
@@ -271,10 +311,11 @@ export function buildLayout(nodes: FsNode[]): AreaLayout {
     const members = byCategory.get(category);
     if (!members) return [];
     const isDirectory = category === "directory";
-    const boxes = members.map((node) => (isDirectory ? plotBox(node) : towerBox(node)));
+    const boxes = members.map((node) => (isDirectory ? plotBox(node, options.directorySize) : towerBox(node)));
     const gap = isDirectory ? PLOT_GAP : TOWER_GAP;
-    // Tallest to the back, then alphabetical across each row. Plots are all the same
-    // low height, so for those the height sort is a no-op and listing order stands.
+    // Tallest to the back, then alphabetical across each row. Unmeasured plots are all
+    // the same low height, so for those the height sort is a no-op and listing order
+    // stands; measured ones step down towards the camera the way towers do.
     const rowOrder = byListing(boxes);
     boxes.sort((a, b) => b.height - a.height);
     const packed = shelfPack(boxes, gap, packWidth(boxes, gap, 1.5), rowOrder);

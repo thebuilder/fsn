@@ -9,8 +9,10 @@ import {
   seededHash,
   type AreaLayout,
   type Decor,
+  type DirectorySize,
   type Placement,
 } from "./layout";
+import type { ColourLens } from "./lens";
 import {
   createScanCage,
   createScanDepthMaterial,
@@ -43,12 +45,16 @@ type DirectoryArea = {
   center: THREE.Vector3;
   radius: number;
   peakHeight: number;
+  /** The listing this was laid out from, in its own order, so it can be laid out again. */
+  nodes: FsNode[];
   placements: Placement[];
   /** Every mesh holding preview markers, so the reveal can flag one update per mesh. */
   decorMeshes: THREE.InstancedMesh[];
   pickMeshes: Map<THREE.InstancedMesh, Placement[]>;
   materials: THREE.Material[];
   labels: THREE.Sprite[];
+  /** False while the warm-up is still compiling this district's programs. */
+  ready: boolean;
   /** 1 = fully lit active directory, 0 = dimmed background directory. */
   activation: number;
   activationTarget: number;
@@ -123,6 +129,20 @@ const BACKDROP = 0x05090a;
 const GROUND_COLOR = 0x14262a;
 const RIM_COLOR = 0x0b171a;
 const PLOT_COLOR = 0x2c3a44;
+/**
+ * Under a lens, colour comes from each instance, so the glow a type material carries in
+ * its own hue would leak the type palette back into every tower. The lens glows in the
+ * plots' neutral instead, which lifts the shadowed faces without saying anything.
+ */
+const LENS_EMISSIVE = PLOT_COLOR;
+/**
+ * A plot under a lens is its lens colour, darkened: enough to read, not enough to drown
+ * the markers standing on it. Darkened rather than mixed with the neutral plot colour,
+ * because that is a cool grey-blue and mixing warm hues into it turns them olive.
+ */
+const PLOT_LENS_SHADE = 0.26;
+/** A name plate under a lens is never darker than this, whatever the lens paints its object. */
+const LABEL_MIN_LIGHTNESS = 0.55;
 
 const RIM_OVERHANG = 1.1;
 const RIM_HEIGHT = 0.22;
@@ -450,6 +470,22 @@ export class WorldScene {
   /** Screen boxes already claimed by this pick, in NDC. Rebuilt every pick. */
   private readonly labelRects: LabelRect[] = [];
   private lastLabelSelect = 0;
+  /** Null is the type palette; anything else paints instances in the lens's colours. */
+  private colourLens: ColourLens | null = null;
+  private directorySize: DirectorySize = "own";
+  /**
+   * District groups replaced by a rebuild, freed only after the frame that first draws
+   * their replacements. Freeing a material releases its shader program, and if nothing
+   * else held it the replacement would compile it again, synchronously, mid-frame.
+   */
+  private readonly retired: THREE.Object3D[] = [];
+  /**
+   * Districts owed a rebuild that could not have it yet: one still compiling would have
+   * the warm-up polling materials the rebuild had freed, and one mid-reveal would lose
+   * the reveal. Each is rebuilt on the first frame it is free to be.
+   */
+  private readonly pendingRebuilds = new Set<string>();
+  private readonly scratchTint = new THREE.Color();
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly callbacks: SceneCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
@@ -558,14 +594,14 @@ export class WorldScene {
     let area = this.areas.get(directory.id);
     let isNew = false;
     if (!area) {
-      const layout = buildLayout(nodes);
+      const layout = buildLayout(nodes, { directorySize: this.directorySize });
       // A directory just surgically evicted by `invalidateArea` rebuilds exactly where
       // it stood, not wherever `findAreaCenter` would otherwise place a fresh arrival.
       const reclaimed = this.invalidatedCenter?.id === directory.id ? this.invalidatedCenter.center : null;
       this.invalidatedCenter = null;
       const center = reclaimed ?? (direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius));
       const scan = direction === "initial" && layout.placements.length > 0 && !prefersReducedMotion();
-      area = this.createArea(directory.id, center, layout, scan);
+      area = this.createArea(directory.id, center, layout, nodes, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
       this.warmUp(area);
@@ -629,7 +665,165 @@ export class WorldScene {
     }
   }
 
-  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout, scanned = false): DirectoryArea {
+  /**
+   * Switches what a plot's height means and lays every district out again to match. The
+   * same listing and the same totals always produce the same city, so switching back
+   * returns exactly the district that was there before.
+   */
+  setDirectorySize(size: DirectorySize): void {
+    if (size === this.directorySize) return;
+    this.directorySize = size;
+    [...this.areas.values()].forEach((area) => this.rebuildArea(area));
+  }
+
+  /** Lays one district out again in place, for when something its layout reads has changed. */
+  refreshArea(directoryId: string): void {
+    const area = this.areas.get(directoryId);
+    if (area) this.rebuildArea(area);
+  }
+
+  /**
+   * Repaints every instance for a colour lens, or for the type palette when `lens` is null.
+   * Nothing is rebuilt: positions, meshes and materials all stay, and only the per-instance
+   * colour and each material's glow change, so no new shader program is ever asked for.
+   * Call it again with a fresh lens when the data behind the current one changes.
+   */
+  setColourLens(lens: ColourLens | null): void {
+    this.colourLens = lens;
+    this.areas.forEach((area) => {
+      area.materials.forEach((material) => {
+        const category = material.userData.lensCategory as FileCategory | undefined;
+        if (category && material instanceof THREE.MeshLambertMaterial) material.emissive.setHex(this.emissiveFor(category));
+      });
+      this.paint(area.placements);
+    });
+    this.forgetLabels();
+  }
+
+  /**
+   * Replaces a district with a fresh layout of the same listing, standing where it stood.
+   * The swap happens within one frame — the replacement uses the programs the district
+   * already had, so it needs no warm-up — and whatever was hovered, aimed at or selected
+   * in it is carried across by node, so a rebuild never reads as a lost selection.
+   */
+  private rebuildArea(area: DirectoryArea): void {
+    if (!area.ready || this.intro?.area === area) {
+      this.pendingRebuilds.add(area.id);
+      return;
+    }
+    this.pendingRebuilds.delete(area.id);
+    const layout = buildLayout(area.nodes, { directorySize: this.directorySize });
+    const next = this.createArea(area.id, area.center, layout, area.nodes);
+    next.activation = area.activation;
+    next.activationTarget = area.activationTarget;
+    next.materials.forEach((material) => applyAreaLook(material, next.activation));
+
+    this.areas.set(area.id, next);
+    this.worldGroup.remove(area.group);
+    this.worldGroup.add(next.group);
+    this.retired.push(area.group);
+    area.pickMeshes.forEach((_placements, mesh) => this.pickMeshes.delete(mesh));
+    if (this.currentArea === area) {
+      this.currentArea = next;
+      next.pickMeshes.forEach((placements, mesh) => this.pickMeshes.set(mesh, placements));
+      this.focusLightOn(next);
+    }
+    if (this.pendingArea === area) this.pendingArea = null;
+
+    const carry = (placement: Placement | null): Placement | null => {
+      if (!placement || !area.placements.includes(placement)) return placement;
+      return next.placements.find((candidate) => candidate.node.id === placement.node.id) ?? null;
+    };
+    this.hoverTarget = carry(this.hoverTarget);
+    if (this.hoverShown && area.placements.includes(this.hoverShown)) {
+      this.hoverShown = carry(this.hoverShown);
+      if (this.hoverShown) this.writeHover(this.hoverShown, this.hoverStrength);
+    }
+    this.aimed = carry(this.aimed);
+    if (this.selected && area.placements.includes(this.selected)) {
+      this.selected = carry(this.selected);
+      if (this.selected) {
+        this.selectionBox.position.copy(this.selected.outlinePosition);
+        this.selectionBox.scale.copy(this.selected.outlineScale).multiplyScalar(1.06);
+      } else {
+        this.selectionBox.visible = false;
+        this.callbacks.onSelect(null);
+      }
+    }
+  }
+
+  private flushRebuilds(): void {
+    for (const id of [...this.pendingRebuilds]) {
+      const area = this.areas.get(id);
+      if (!area) this.pendingRebuilds.delete(id);
+      else if (area.ready && this.intro?.area !== area) this.rebuildArea(area);
+    }
+  }
+
+  /** A material's glow: its type colour under the type palette, a quiet neutral under a lens. */
+  private emissiveFor(category: FileCategory): number {
+    if (category === "directory") return PLOT_COLOR;
+    return this.colourLens ? LENS_EMISSIVE : palette[category];
+  }
+
+  /**
+   * The colour an object is drawn in before hover brightens it. Materials are white and
+   * every instance carries its own colour, so the type palette and any lens take the same
+   * path and hover can multiply over either one.
+   */
+  private baseColor(placement: Placement, target: THREE.Color): THREE.Color {
+    const lensed = this.colourLens?.colorFor(placement.node) ?? null;
+    if (placement.node.kind === "directory") {
+      // A plot stays low-key land its markers stand on; a lens only shades it.
+      return lensed === null ? target.setHex(PLOT_COLOR) : target.setHex(lensed).multiplyScalar(PLOT_LENS_SHADE);
+    }
+    return target.setHex(lensed ?? palette[categoryOf(placement.node)]);
+  }
+
+  private markerColor(placement: Placement, decor: Decor, target: THREE.Color): THREE.Color {
+    const lensed = this.colourLens?.markerColorFor(placement.node, decor.index) ?? null;
+    return target.setHex(lensed ?? palette[decor.category]);
+  }
+
+  /** Writes every instance colour for these placements and their markers. */
+  private paint(placements: Placement[]): void {
+    const touched = new Set<THREE.InstancedMesh>();
+    for (const placement of placements) {
+      if (placement.mesh && placement.instanceIndex !== undefined) {
+        const strength = placement === this.hoverShown ? this.hoverStrength : 0;
+        placement.mesh.setColorAt(placement.instanceIndex, this.tintedColor(placement, strength));
+        touched.add(placement.mesh);
+      }
+      for (const decor of placement.decor) {
+        if (!decor.mesh || decor.instanceIndex === undefined) continue;
+        decor.mesh.setColorAt(decor.instanceIndex, this.markerColor(placement, decor, this.scratchColor));
+        touched.add(decor.mesh);
+      }
+    }
+    touched.forEach((mesh) => {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    });
+  }
+
+  /** Base colour times the hover tint at `strength`, in the shared scratch colour. */
+  private tintedColor(placement: Placement, strength: number): THREE.Color {
+    return this.baseColor(placement, this.scratchColor).multiply(this.scratchTint.copy(NEUTRAL_TINT).lerp(HOVER_TINT, strength));
+  }
+
+  /** Drops every name plate so the next pick draws them again in the current colours. */
+  private forgetLabels(): void {
+    this.areas.forEach((area) => {
+      area.labels.forEach((sprite) => {
+        (sprite.userData.placement as Placement).label = undefined;
+        area.group.remove(sprite);
+        sprite.material.map?.dispose();
+        sprite.material.dispose();
+      });
+      area.labels.length = 0;
+    });
+  }
+
+  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout, nodes: FsNode[], scanned = false): DirectoryArea {
     const group = new THREE.Group();
     group.userData.directoryArea = id;
     const placements = layout.placements;
@@ -674,12 +868,13 @@ export class WorldScene {
       // A directory's body is the plot itself, kept neutral: the markers standing on it
       // are what carry colour, and a crimson slab under them would drown them out.
       const isDirectory = category === "directory";
-      const bodyColor = isDirectory ? PLOT_COLOR : palette[category];
+      // White, because the colour is each instance's: see `baseColor`.
       const buildingMaterial = new THREE.MeshLambertMaterial({
-        color: bodyColor,
-        emissive: bodyColor,
+        color: 0xffffff,
+        emissive: this.emissiveFor(category),
         emissiveIntensity: isDirectory ? 0.2 : 0.05,
       });
+      buildingMaterial.userData.lensCategory = category;
       rememberActiveLook(buildingMaterial);
       materials.push(buildingMaterial);
       const buildingMesh = new THREE.InstancedMesh(this.unitBox, buildingMaterial, categoryPlacements.length);
@@ -690,13 +885,12 @@ export class WorldScene {
         buildingMesh.setMatrixAt(index, matrix);
       });
       buildingMesh.instanceMatrix.needsUpdate = true;
-      // Establish instanceColor up front so the first hover does not recompile the shader.
+      // Colours are written by `paint` below, which also establishes instanceColor before
+      // the warm-up compiles this mesh: added any later, it would be a new program.
       categoryPlacements.forEach((placement, index) => {
-        buildingMesh.setColorAt(index, NEUTRAL_TINT);
         placement.mesh = buildingMesh;
         placement.instanceIndex = index;
       });
-      if (buildingMesh.instanceColor) buildingMesh.instanceColor.needsUpdate = true;
       buildingMesh.computeBoundingBox();
       buildingMesh.computeBoundingSphere();
       pickMeshes.set(buildingMesh, categoryPlacements);
@@ -715,10 +909,11 @@ export class WorldScene {
     }));
     for (const [category, markers] of markersByCategory) {
       const markerMaterial = new THREE.MeshLambertMaterial({
-        color: palette[category],
-        emissive: palette[category],
+        color: 0xffffff,
+        emissive: this.emissiveFor(category),
         emissiveIntensity: 0.14,
       });
+      markerMaterial.userData.lensCategory = category;
       rememberActiveLook(markerMaterial);
       materials.push(markerMaterial);
       const markerMesh = new THREE.InstancedMesh(this.unitBox, markerMaterial, markers.length);
@@ -735,6 +930,8 @@ export class WorldScene {
       decorMeshes.push(markerMesh);
       group.add(markerMesh);
     }
+
+    this.paint(placements);
 
     // Labels are not built here. `selectLabels` names whatever is nearest on screen and
     // creates the sprite at that moment, so this list fills in as the camera explores.
@@ -761,8 +958,8 @@ export class WorldScene {
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
     return {
       id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
-      placements, decorMeshes, pickMeshes, materials, labels,
-      activation: 1, activationTarget: 1, scan,
+      nodes, placements, decorMeshes, pickMeshes, materials, labels,
+      ready: true, activation: 1, activationTarget: 1, scan,
     };
   }
 
@@ -974,8 +1171,7 @@ export class WorldScene {
   }
 
   private buildLabel(placement: Placement, area: DirectoryArea): THREE.Sprite {
-    const color = palette[categoryOf(placement.node)];
-    const sprite = makeLabel(placement.node.name, `#${color.toString(16).padStart(6, "0")}`);
+    const sprite = makeLabel(placement.node.name, `#${this.labelColor(placement).getHexString()}`);
     sprite.userData.placement = placement;
     this.sizeLabel(sprite);
     sprite.userData.introDelay = placement.introDelay;
@@ -988,6 +1184,21 @@ export class WorldScene {
     area.labels.push(sprite);
     area.group.add(sprite);
     return sprite;
+  }
+
+  /**
+   * A plate is inked in its object's colour, so a lens re-inks the names with it. Lens
+   * colours are chosen for towers, though, and the dimmest of them — ignored files — would
+   * print a name nobody could read, so a plate is lifted to a floor of lightness.
+   */
+  private labelColor(placement: Placement): THREE.Color {
+    const color = new THREE.Color(palette[categoryOf(placement.node)]);
+    const lensed = this.colourLens?.colorFor(placement.node) ?? null;
+    if (lensed === null) return color;
+    color.setHex(lensed);
+    const hsl = color.getHSL({ h: 0, s: 0, l: 0 });
+    if (hsl.l < LABEL_MIN_LIGHTNESS) color.setHSL(hsl.h, hsl.s, LABEL_MIN_LIGHTNESS);
+    return color;
   }
 
   /** Drops the least recently shown labels once the cache outgrows its budget. */
@@ -1219,12 +1430,14 @@ export class WorldScene {
    */
   private warmUp(area: DirectoryArea): void {
     this.warming += 1;
+    area.ready = false;
     // Without parallel compilation the driver still checks each program on its first
     // draw, and that draw stalls. So the district is shown one frame before the reveal
     // restarts: the stall lands on a frame where the reveal is still parked at nothing,
     // and the animation begins after it rather than jumping ahead by its length.
     const done = () => {
       if (this.lifecycle.signal.aborted) return;
+      area.ready = true;
       area.group.visible = true;
       requestAnimationFrame(() => {
         this.warming -= 1;
@@ -1497,6 +1710,7 @@ export class WorldScene {
   private detachWorld(): THREE.Object3D[] {
     this.pickMeshes.clear();
     this.areas.clear();
+    this.pendingRebuilds.clear();
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
@@ -1613,7 +1827,7 @@ export class WorldScene {
     const mesh = placement.mesh;
     if (!mesh || placement.instanceIndex === undefined) return;
     const lift = HOVER_LIFT * strength;
-    mesh.setColorAt(placement.instanceIndex, this.scratchColor.copy(NEUTRAL_TINT).lerp(HOVER_TINT, strength));
+    mesh.setColorAt(placement.instanceIndex, this.tintedColor(placement, strength));
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.scratchVector.copy(placement.position).setY(placement.position.y + lift);
     this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, placement.scale);
@@ -1895,6 +2109,7 @@ export class WorldScene {
 
     this.updateActivation(delta);
     if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    if (this.pendingRebuilds.size) this.flushRebuilds();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
     // Coalesces every pointermove since the last frame into one raycast, the way the
@@ -1928,6 +2143,12 @@ export class WorldScene {
       this.updateAim();
     }
     this.renderer.render(this.scene, this.camera);
+    // Only now, with their replacements drawn and holding the programs, can the districts
+    // a rebuild retired be freed without taking a shader down with them.
+    if (this.retired.length) {
+      this.retired.forEach((object) => this.disposeAreaObjects(object));
+      this.retired.length = 0;
+    }
     this.frame = requestAnimationFrame(this.animate);
   };
 
@@ -1937,6 +2158,8 @@ export class WorldScene {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.disposeWorld();
+    this.retired.forEach((object) => this.disposeAreaObjects(object));
+    this.retired.length = 0;
     // Environment and outline resources live outside worldGroup, so disposeWorld never
     // reaches them; everything per-scene-instance is freed here, shared resources last.
     this.grid.geometry.dispose();
