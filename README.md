@@ -26,8 +26,8 @@ pnpm dev:desktop
 - Drag to orbit; right-drag to pan; scroll to move through the world.
 - Move with `W`, `A`, `S`, `D` or the arrow keys.
 - Click an object to inspect it; double-click a directory to enter it; `Backspace` returns to the parent.
-- Press `/` or `Cmd/Ctrl + K` to search the current directory.
-- FSN writes the current directory into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off.
+- Press `/` or `Cmd/Ctrl + K` to search everything in the open folder. The first search indexes it in the background; picking a result flies to it.
+- FSN writes the current directory, and the object selected there, into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off, viewer window and all.
 
 Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override. On desktop, the file policy can instead hand it to its native application.
 
