@@ -86,6 +86,7 @@ export class FileViewer {
   private fitted = false;
   private fitFrame = 0;
   private discardGuard: (() => boolean) | null = null;
+  private shown: FsNode | null = null;
 
   constructor(
     private readonly elements: ViewerElements,
@@ -160,6 +161,7 @@ export class FileViewer {
     this.elements.size.textContent = formatBytes(node.size);
     this.elements.mode.textContent = "OBJECT VIEWER";
     if (!this.elements.dialog.open) this.elements.dialog.showModal();
+    this.shown = node;
     // Without this the dialog autofocuses the close light, which draws a focus ring
     // on a window the reader opened with the mouse. The content region is the honest
     // landing spot: it scrolls, and it only rings when the reader is on the keyboard.
@@ -172,6 +174,15 @@ export class FileViewer {
         ? nativeOpenError.message
         : "NATIVE OPEN FAILED";
     }
+  }
+
+  /**
+   * The object whose window is open, or null. Set before `open` first waits on anything,
+   * so a caller can read it straight after calling `open` — which is when the address bar
+   * wants to know — rather than after the payload has loaded.
+   */
+  get shownNode(): FsNode | null {
+    return this.shown;
   }
 
   /** Lets the host window consult the active renderer before it is destroyed. */
@@ -651,6 +662,7 @@ export class FileViewer {
   }
 
   private reset(): void {
+    this.shown = null;
     this.releaseRenderer();
     this.payload = null;
     this.discardGuard = null;
