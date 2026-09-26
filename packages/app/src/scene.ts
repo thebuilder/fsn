@@ -405,6 +405,8 @@ export class WorldScene {
   private readonly glowTexture = createGlowTexture();
   /** A label that is never shown, kept so its shader program is compiled ahead of need. */
   private readonly labelPrimer = makeLabel("", "#000000");
+  /** Shares the selection's geometry and material; it owns neither. */
+  private readonly outlinePrimer: THREE.LineSegments;
   /** Wires from each visited folder's plot to its district; outside every area's group. */
   private readonly links = new LinkNetwork();
   private readonly thumbnails: ThumbnailLoader;
@@ -543,11 +545,6 @@ export class WorldScene {
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
     this.scene.add(this.links.group);
-    // Primers are drawn once per warm-up, so they must never cover a pixel or be culled.
-    for (const primer of this.primers()) {
-      primer.scale.setScalar(0);
-      primer.frustumCulled = false;
-    }
 
     this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
     this.selectionMaterial = new THREE.LineBasicMaterial({ color: SELECTION_COLOR, transparent: true, opacity: 0.95 });
@@ -558,6 +555,17 @@ export class WorldScene {
     this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
+    // Both outlines start hidden, so without this their program was first compiled by
+    // the first click that selected anything: a freeze on the very gesture meant to
+    // answer it. The aim outline's material differs only in colour and opacity, which
+    // are uniforms, so priming one primes both.
+    this.outlinePrimer = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
+
+    // Primers are drawn once per warm-up, so they must never cover a pixel or be culled.
+    for (const primer of this.primers()) {
+      primer.scale.setScalar(0);
+      primer.frustumCulled = false;
+    }
 
     const listener = { signal: this.lifecycle.signal };
     this.canvas.addEventListener("pointermove", this.onPointerMove, listener);
@@ -1343,7 +1351,7 @@ export class WorldScene {
 
   /** Stand-ins for everything drawn with a program no district's own objects compile. */
   private primers(): THREE.Object3D[] {
-    return [this.labelPrimer, this.links.primer, this.thumbnails.primer];
+    return [this.labelPrimer, this.outlinePrimer, this.links.primer, this.thumbnails.primer];
   }
 
   private startIntro(area: DirectoryArea): void {
