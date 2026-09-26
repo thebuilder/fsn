@@ -13,6 +13,7 @@ import {
 } from "./layout";
 import { LinkNetwork, type LinkFootprint } from "./links";
 import { ThumbnailLoader, type ReadFile } from "./thumbnails";
+import { PhosphorBloom } from "./bloom";
 import {
   createScanCage,
   createScanDepthMaterial,
@@ -229,6 +230,14 @@ const EASE_ACTIVATION = 0.02;
 const HOVER_LIFT = 0.35;
 /** How long the camera must stay inside an area before it takes over the UI. */
 const AREA_DWELL = 400;
+const SELECTION_COLOR = 0xf4ffd9;
+const AIM_COLOR = 0x7fffe0;
+/**
+ * How much hotter the outlines burn while the glow is up. Tone mapping holds every lit
+ * surface under the bloom's threshold, which is the point, but it holds a white line
+ * there too; so the lines meant to glow are pushed past it, and only while it is on.
+ */
+const OUTLINE_GLOW_HEAT = 2.5;
 const HOVER_TINT = new THREE.Color(1.6, 1.6, 1.6);
 const NEUTRAL_TINT = new THREE.Color(1, 1, 1);
 const NO_ROTATION = new THREE.Quaternion();
@@ -401,6 +410,9 @@ export class WorldScene {
   private readonly thumbnails: ThumbnailLoader;
   /** The district whose roofs were last asked for, so each arrival asks exactly once. */
   private thumbnailArea: DirectoryArea | null = null;
+  private readonly bloom: PhosphorBloom;
+  /** What the viewer asked for; the glow itself waits for a still moment to compile. */
+  private glowWanted = false;
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -492,6 +504,7 @@ export class WorldScene {
     this.camera = new THREE.PerspectiveCamera(52, 1, 0.5, 3000);
     this.camera.position.set(0, 16, 30);
     this.scene.add(this.camera);
+    this.bloom = new PhosphorBloom(this.renderer, this.scene, this.camera);
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -537,11 +550,11 @@ export class WorldScene {
     }
 
     this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
-    this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
+    this.selectionMaterial = new THREE.LineBasicMaterial({ color: SELECTION_COLOR, transparent: true, opacity: 0.95 });
     this.selectionBox = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
-    this.aimMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 });
+    this.aimMaterial = new THREE.LineBasicMaterial({ color: AIM_COLOR, transparent: true, opacity: 0.5 });
     this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
@@ -1489,6 +1502,28 @@ export class WorldScene {
     if (this.currentArea) this.flyToArea(this.currentArea, "travel");
   }
 
+  /** Switches the phosphor glow on or off; see `updateGlow` for when it actually starts. */
+  setGlow(on: boolean): void {
+    this.glowWanted = on;
+  }
+
+  /**
+   * The glow's passes are compiled the first time it is wanted, and never inside a reveal
+   * or a flight: that is the same freeze the warm-up exists to keep out of the arrival.
+   * So a glow remembered from a previous visit comes up once the city has landed, and one
+   * switched on mid-flight comes up when the flight does. Nor before there is a city at
+   * all: the page's first frames have nothing to reveal yet, and compiling then is
+   * exactly the load-time freeze this is keeping out.
+   */
+  private updateGlow(delta: number): void {
+    const still = this.currentArea !== null && !this.intro && !this.flight && !this.revealPaused;
+    if (this.glowWanted && still && !this.bloom.isReady && !this.bloom.isPreparing) void this.bloom.prepare();
+    this.bloom.update(delta, this.glowWanted);
+    const heat = 1 + this.bloom.level * OUTLINE_GLOW_HEAT;
+    this.selectionMaterial.color.set(SELECTION_COLOR).multiplyScalar(heat);
+    this.aimMaterial.color.set(AIM_COLOR).multiplyScalar(heat);
+  }
+
   getAimedNode(): FsNode | null {
     return this.aimed?.node ?? null;
   }
@@ -1920,6 +1955,7 @@ export class WorldScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    this.bloom.setSize(width, height);
   };
 
   private updateMovement(delta: number): void {
@@ -2032,7 +2068,9 @@ export class WorldScene {
       this.checkAreaEntry();
       this.updateAim();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.updateGlow(delta);
+    if (this.bloom.drawing) this.bloom.render(delta);
+    else this.renderer.render(this.scene, this.camera);
     this.frame = requestAnimationFrame(this.animate);
   };
 
@@ -2061,6 +2099,7 @@ export class WorldScene {
     this.labelPrimer.material.dispose();
     this.links.dispose();
     this.thumbnails.dispose();
+    this.bloom.dispose();
     this.renderer.dispose();
   }
 }

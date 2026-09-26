@@ -36,6 +36,8 @@ const ROOF_COVER = 0.84;
 /** Clears the roof by enough to never fight it for depth, however far away it is seen. */
 const ROOF_CLEARANCE = 0.02;
 const FADE_IN = 420;
+/** White, as a picture shows it: 83% of the display's own, just below where the glow starts. */
+const PICTURE_TINT = 0xd4d4d4;
 /** A picture in a background district keeps this much of itself, like the towers dimming under it. */
 const INACTIVE_OPACITY = 0.3;
 
@@ -191,8 +193,11 @@ export class ThumbnailLoader {
 
   private createMaterial(map: THREE.Texture): THREE.MeshBasicMaterial {
     // Not tone mapped: a photograph is already an image meant for a screen, and running it
-    // through the scene's filmic curve would grade someone's pictures on their behalf.
-    return new THREE.MeshBasicMaterial({ map, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+    // through the scene's filmic curve would grade someone's pictures on their behalf. It
+    // is shown a little under full brightness instead, which sits it among roofs the
+    // curve has rolled off, and keeps its whites under the glow's threshold: a picture is
+    // not a light, and a bright sky should not halo as if it were one.
+    return new THREE.MeshBasicMaterial({ map, color: PICTURE_TINT, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
   }
 
   private pump(): void {

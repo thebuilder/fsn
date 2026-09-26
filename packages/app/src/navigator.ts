@@ -11,6 +11,7 @@ import {
   type SearchMatch,
   type SearchOutcome,
 } from "@fsn/core";
+import { mountGlowToggle } from "./bloom";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
 import { dismissOnOutsidePress } from "./light-dismiss";
@@ -109,6 +110,7 @@ const world = new WorldScene(canvas, {
   onEnterArea: adoptArea,
   readFile: (node, signal) => platform.viewer.read(node, signal),
 });
+mountGlowToggle(getElement<HTMLButtonElement>("glow-button"), world, lifecycle.signal);
 
 function currentDirectory(): FsNode {
   return ancestry[ancestry.length - 1];
