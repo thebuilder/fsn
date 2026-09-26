@@ -12,6 +12,9 @@
       <button class="icon-button" id="search-button" type="button" aria-label="Search files" title="Search (⌘K)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
       </button>
+      <button class="icon-button lens-button" id="lens-button" type="button" aria-label="Lenses" aria-expanded="false" aria-controls="lens-panel" title="Lenses">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 8.5l9 4.5 9-4.5z"/><path d="m3 12.5 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg>
+      </button>
       <button class="button button-secondary" id="demo-button" type="button">Demo world</button>
       <button class="button button-primary" id="folder-button" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5H3z"/></svg>
@@ -45,9 +48,30 @@
     <button class="button button-primary enter-button" id="enter-button" type="button" hidden>Enter directory <span aria-hidden="true">↗</span></button>
   </aside>
 
-  <section class="legend" aria-label="File type legend">
-    <p class="eyebrow">OBJECT TYPES</p>
-    <ul>
+  <!-- The lenses and the legend they change share one panel: the legend is only ever
+       true for the lens chosen above it. On a small screen the panel is folded behind
+       the lens button in the toolbar rather than taking a corner of the view for good. -->
+  <section class="legend" id="lens-panel" aria-label="Lenses and legend">
+    <div class="lens-controls">
+      <div class="lens-row">
+        <span class="lens-label" id="lens-size-label">Size</span>
+        <div class="scope-switch" role="group" aria-labelledby="lens-size-label">
+          <button class="scope-button" type="button" data-lens-size="own" aria-pressed="true" title="Each folder by its own listing">Own</button>
+          <button class="scope-button" type="button" data-lens-size="total" aria-pressed="false" title="Each folder by everything inside it">Total</button>
+        </div>
+      </div>
+      <div class="lens-row">
+        <span class="lens-label" id="lens-colour-label">Colour</span>
+        <div class="scope-switch" role="group" aria-labelledby="lens-colour-label">
+          <button class="scope-button" type="button" data-lens-colour="type" aria-pressed="true" title="Colour by file type">Type</button>
+          <button class="scope-button" type="button" data-lens-colour="age" aria-pressed="false" title="Colour by when it last changed">Age</button>
+          <button class="scope-button" type="button" data-lens-colour="git" aria-pressed="false" title="Colour by git status" hidden>Git</button>
+        </div>
+      </div>
+      <p class="lens-progress" id="lens-progress" role="status" hidden></p>
+    </div>
+    <p class="eyebrow" id="legend-title">OBJECT TYPES</p>
+    <ul id="legend-list">
       <li><i class="swatch swatch-directory"></i>Directory</li>
       <li><i class="swatch swatch-code"></i>Code</li>
       <li><i class="swatch swatch-media"></i>Media</li>

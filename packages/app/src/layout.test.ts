@@ -129,3 +129,45 @@ describe("towerBox", () => {
     expect(large.height).toBeGreaterThan(small.height);
   });
 });
+
+describe("directory totals", () => {
+  function measured(name: string, bytes: number): FsNode {
+    const node = fakeNode(name, 0, "directory", 4);
+    node.usage = { bytes, files: 1, directories: 0, complete: true };
+    return node;
+  }
+
+  it("leaves every plot the same height while sizes mean a folder's own listing", () => {
+    expect(plotBox(measured("big", 5e9), "own").height).toBe(plotBox(measured("small", 1e3), "own").height);
+  });
+
+  it("raises a plot by everything beneath it once it has been measured", () => {
+    const small = plotBox(measured("small", 40_000), "total");
+    const large = plotBox(measured("large", 4e9), "total");
+    expect(large.height).toBeGreaterThan(small.height);
+  });
+
+  it("keeps an unmeasured plot at its usual height rather than guessing", () => {
+    const unmeasured = fakeNode("pending", 0, "directory", 4);
+    expect(plotBox(unmeasured, "total").height).toBe(plotBox(unmeasured, "own").height);
+  });
+
+  it("stands a raised plot's markers on its new roof", () => {
+    const node = measured("tall", 8e9);
+    const [placement] = buildLayout([node], { directorySize: "total" }).placements;
+    const roof = placement.position.y + placement.scale.y / 2;
+    for (const decor of placement.decor) {
+      expect(decor.position.y - decor.scale.y / 2).toBeCloseTo(roof, 6);
+    }
+  });
+
+  it("is deterministic for the same nodes and totals", () => {
+    const nodes = [measured("a", 1e6), measured("b", 3e8), fakeNode("c.ts", 4_000)];
+    expect(buildLayout(nodes, { directorySize: "total" })).toEqual(buildLayout(nodes, { directorySize: "total" }));
+  });
+
+  it("numbers each marker after the child it stands for", () => {
+    const [placement] = buildLayout([fakeNode("src", 0, "directory", 5)]).placements;
+    expect(placement.decor.map((decor) => decor.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
