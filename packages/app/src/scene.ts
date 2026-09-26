@@ -52,13 +52,16 @@ type DirectoryArea = {
   /** 1 = fully lit active directory, 0 = dimmed background directory. */
   activation: number;
   activationTarget: number;
-  /** Present only on an area built to be revealed by the wireframe scan. */
-  scan?: AreaScan;
+  /** Every area carries the scan's hooks; only an arrival switches them on. */
+  scan: AreaScan;
 };
 
 type AreaScan = {
   uniforms: ScanUniforms;
-  /** Removed and freed the moment the scan ends; the shader hooks stay, switched off. */
+  /**
+   * Present only while a scan is still to play or playing. Removed and freed the
+   * moment it ends; the shader hooks stay, switched off.
+   */
   cage: THREE.LineSegments | null;
   /** Distance from the scan origin to the furthest corner of the district. */
   reach: number;
@@ -188,6 +191,8 @@ const DOUBLE_TAP_RADIUS = 36;
 /** Reveal: each object rises over INTRO_RISE, staggered outwards across INTRO_STAGGER. */
 const INTRO_RISE = 420;
 const INTRO_LABEL_FADE = 240;
+/** A name fades in over this long once the scan's solid front reaches its object. */
+const SCAN_LABEL_FADE = 520;
 /** How far ahead of its height an object's footprint opens: 4 means by the first quarter. */
 const INTRO_SPREAD_LEAD = 4;
 
@@ -379,6 +384,8 @@ export class WorldScene {
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
   /** One glow canvas per scene instance, reused by every area's beacon. */
   private readonly glowTexture = createGlowTexture();
+  /** A label that is never shown, kept so its shader program is compiled ahead of need. */
+  private readonly labelPrimer = makeLabel("", "#000000");
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -401,6 +408,8 @@ export class WorldScene {
   private flight: CameraFlight | null = null;
   private intro: AreaIntro | null = null;
   private revealHeld = false;
+  /** New districts whose shaders are still compiling; the reveal waits for them. */
+  private warming = 0;
   private hovered: FsNode | null = null;
   private aimed: Placement | null = null;
   private selected: Placement | null = null;
@@ -539,7 +548,12 @@ export class WorldScene {
   }
 
   setDirectory(directory: FsNode, nodes: FsNode[], direction: NavigationDirection): void {
-    if (direction === "initial") this.disposeWorld();
+    // A new filesystem replaces the world, but the old one is only freed once the new
+    // one has been compiled. Its materials are what keep the shader programs alive, and
+    // freeing them first threw away the very programs the replacement was about to ask
+    // for: choosing the demo from the welcome screen, which already shows the demo,
+    // recompiled everything and froze a phone for over a second.
+    const retired = direction === "initial" ? this.detachWorld() : [];
 
     let area = this.areas.get(directory.id);
     let isNew = false;
@@ -554,8 +568,10 @@ export class WorldScene {
       area = this.createArea(directory.id, center, layout, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
+      this.warmUp(area);
       isNew = true;
     }
+    retired.forEach((object) => this.disposeAreaObjects(object));
 
     this.setActiveArea(area);
     // Only reveal on first build; re-entering a known directory should not replay it.
@@ -740,7 +756,7 @@ export class WorldScene {
     materials.push(beacon.material);
     group.add(beacon);
 
-    const scan = scanned ? this.prepareScan(center, layout, group, materials, [rim, ground]) : undefined;
+    const scan = this.prepareScan(center, layout, group, materials, [rim, ground], scanned);
 
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
     return {
@@ -751,10 +767,16 @@ export class WorldScene {
   }
 
   /**
-   * Hooks every material of a freshly built district into one set of scan uniforms and
-   * lays the wire cage over it. Has to happen before the district's first frame: the
-   * hooks are compiled into the shaders, and a district drawn once without them would
-   * flash whole before the scan began.
+   * Hooks every material of a freshly built district into one set of scan uniforms and,
+   * when it is to be scanned, lays the wire cage over it. Has to happen before the
+   * district's first frame: the hooks are compiled into the shaders, and a district drawn
+   * once without them would flash whole before the scan began.
+   *
+   * Districts that will only rise get the hooks too, switched off. Every district then
+   * draws with the same few shader programs, so the first double-click into a folder
+   * reuses what the arrival already compiled; with two variants, that click paid for a
+   * second round of compilation, which on a phone is a freeze of the better part of a
+   * second.
    */
   private prepareScan(
     center: THREE.Vector3,
@@ -762,18 +784,21 @@ export class WorldScene {
     group: THREE.Group,
     materials: THREE.Material[],
     slabs: THREE.Mesh[],
+    scanned: boolean,
   ): AreaScan {
     const halfWidth = layout.groundWidth / 2 + RIM_OVERHANG;
     const halfDepth = layout.groundDepth / 2 + RIM_OVERHANG;
     const origin = new THREE.Vector3(center.x, GROUND_TOP, center.z);
     const reach = Math.hypot(halfWidth, halfDepth, layout.peakHeight);
     const uniforms = createScanUniforms(origin, reach);
+    uniforms.uScanEnabled.value = scanned ? 1 : 0;
     materials.forEach((material) => installScan(material, uniforms));
 
     const depthMaterial = createScanDepthMaterial(uniforms);
     group.traverse((object) => {
       if (object instanceof THREE.Mesh && object.castShadow) object.customDepthMaterial = depthMaterial;
     });
+    if (!scanned) return { uniforms, cage: null, reach };
 
     const boxes: CageBox[] = slabs.map((slab) => ({ position: slab.position, scale: slab.scale }));
     layout.placements.forEach((placement) => {
@@ -1168,16 +1193,60 @@ export class WorldScene {
   releaseReveal(): void {
     if (!this.revealHeld) return;
     this.revealHeld = false;
+    this.restartReveal();
+  }
+
+  /** Paused by the welcome screen, or by shaders still compiling off the main thread. */
+  private get revealPaused(): boolean {
+    return this.revealHeld || this.warming > 0;
+  }
+
+  private restartReveal(): void {
+    if (this.revealPaused) return;
     const now = performance.now();
     if (this.intro) this.intro.startedAt = now;
     if (this.flight) this.flight.startedAt = now;
+  }
+
+  /**
+   * Compiles a new district's shaders before it is first drawn, and keeps the district
+   * hidden and its reveal parked until they are ready. Drawing it straight away makes
+   * WebGL compile and link every program it needs synchronously inside that frame,
+   * which on a phone froze the page for over a second just as the arrival began.
+   * `compileAsync` issues the work up front and, where the driver offers parallel
+   * compilation, waits for it without blocking; a district whose programs are already
+   * cached comes back within a frame or two.
+   */
+  private warmUp(area: DirectoryArea): void {
+    this.warming += 1;
+    // Without parallel compilation the driver still checks each program on its first
+    // draw, and that draw stalls. So the district is shown one frame before the reveal
+    // restarts: the stall lands on a frame where the reveal is still parked at nothing,
+    // and the animation begins after it rather than jumping ahead by its length.
+    const done = () => {
+      if (this.lifecycle.signal.aborted) return;
+      area.group.visible = true;
+      requestAnimationFrame(() => {
+        this.warming -= 1;
+        this.restartReveal();
+      });
+    };
+    // compileAsync only reaches visible objects, so it has to run before the hide. The
+    // label primer rides along because labels are built lazily, well into the reveal,
+    // and the first one compiled its program mid-scan: a visible hitch just as the
+    // names began to appear. Its program outlives the visit because the primer's
+    // material does; it is only ever compiled, never drawn.
+    area.group.add(this.labelPrimer);
+    this.renderer.compileAsync(area.group, this.camera, this.scene).then(done, done);
+    area.group.remove(this.labelPrimer);
+    area.group.visible = false;
   }
 
   private startIntro(area: DirectoryArea): void {
     if (this.intro) this.finishIntro();
     if (!area.placements.length) return;
     if (prefersReducedMotion()) return;
-    this.intro = { area, startedAt: performance.now(), mode: area.scan ? "scan" : "rise" };
+    this.intro = { area, startedAt: performance.now(), mode: area.scan.cage ? "scan" : "rise" };
     area.labels.forEach((label) => (label.material.userData.introFade = 0));
     this.applyIntro(0);
   }
@@ -1186,7 +1255,7 @@ export class WorldScene {
   private applyIntro(elapsed: number): boolean {
     const intro = this.intro;
     if (!intro) return true;
-    if (intro.mode === "scan" && intro.area.scan) return this.applyScan(intro.area, intro.area.scan, elapsed);
+    if (intro.mode === "scan") return this.applyScan(intro.area, intro.area.scan, elapsed);
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
@@ -1250,14 +1319,28 @@ export class WorldScene {
     grid.uScanWidth.value = uniforms.uScanRim.value;
     grid.uScanStrength.value = pose.wire;
 
+    // Each label keeps its own clock from the moment the front reaches it. Fading over a
+    // span of radius instead made the fade as fast as the front, and the front leaves
+    // the centre at a sprint: the nearest names snapped on in a frame or two.
     const origin = uniforms.uScanOrigin.value;
-    const fadeSpan = scan.reach * 0.12;
+    let labelsSettled = true;
     area.labels.forEach((label) => {
       const placement = label.userData.placement as Placement;
       const arrival = solidReachesAt(placement.position.distanceTo(origin), scan.reach);
-      label.material.userData.introFade = THREE.MathUtils.clamp((pose.radius - arrival) / fadeSpan, 0, 1);
+      const reached = label.userData.scanReachedAt as number | undefined;
+      if (pose.radius < arrival || (reached !== undefined && reached > elapsed)) {
+        label.userData.scanReachedAt = undefined;
+        label.material.userData.introFade = 0;
+        labelsSettled = false;
+        return;
+      }
+      const since = elapsed - (reached ?? elapsed);
+      if (reached === undefined) label.userData.scanReachedAt = elapsed;
+      const progress = THREE.MathUtils.clamp(since / SCAN_LABEL_FADE, 0, 1);
+      if (progress < 1) labelsSettled = false;
+      label.material.userData.introFade = THREE.MathUtils.smoothstep(progress, 0, 1);
     });
-    return pose.done;
+    return pose.done && labelsSettled;
   }
 
   /** Switches the scan off for good: the shader hooks stay compiled but stand down. */
@@ -1276,7 +1359,7 @@ export class WorldScene {
   private finishIntro(): void {
     const intro = this.intro;
     if (!intro) return;
-    if (intro.mode === "scan" && intro.area.scan) {
+    if (intro.mode === "scan") {
       this.endScan(intro.area.scan);
       intro.area.labels.forEach((label) => (label.material.userData.introFade = 1));
       this.intro = null;
@@ -1407,6 +1490,11 @@ export class WorldScene {
   }
 
   private disposeWorld(): void {
+    this.detachWorld().forEach((object) => this.disposeAreaObjects(object));
+  }
+
+  /** Forgets every area and hands back their objects, still alive, for the caller to free. */
+  private detachWorld(): THREE.Object3D[] {
     this.pickMeshes.clear();
     this.areas.clear();
     this.currentArea = null;
@@ -1416,11 +1504,9 @@ export class WorldScene {
     this.hoverTarget = null;
     this.hoverShown = null;
     this.hoverStrength = 0;
-    while (this.worldGroup.children.length) {
-      const object = this.worldGroup.children.pop();
-      if (!object) continue;
-      this.disposeAreaObjects(object);
-    }
+    const detached = [...this.worldGroup.children];
+    this.worldGroup.clear();
+    return detached;
   }
 
   /**
@@ -1458,9 +1544,23 @@ export class WorldScene {
     this.pointer.set(x, y);
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects([...this.pickMeshes.keys()], false);
-    const hit = hits[0];
-    if (!hit || hit.instanceId === undefined || !(hit.object instanceof THREE.InstancedMesh)) return null;
-    return this.pickMeshes.get(hit.object)?.[hit.instanceId] ?? null;
+    for (const hit of hits) {
+      if (hit.instanceId === undefined || !(hit.object instanceof THREE.InstancedMesh)) continue;
+      const placement = this.pickMeshes.get(hit.object)?.[hit.instanceId];
+      // The ray goes where the eye does: through a district still hidden while its
+      // shaders compile, and through towers the scan has not revealed yet.
+      if (!placement || !hit.object.parent?.visible || this.awaitingScan(placement)) continue;
+      return placement;
+    }
+    return null;
+  }
+
+  private awaitingScan(placement: Placement): boolean {
+    const intro = this.intro;
+    if (intro?.mode !== "scan" || !intro.area.placements.includes(placement)) return false;
+    const { uniforms, reach } = intro.area.scan;
+    const distance = placement.position.distanceTo(uniforms.uScanOrigin.value);
+    return uniforms.uScanRadius.value < solidReachesAt(distance, reach);
   }
 
   private updateAim(): void {
@@ -1791,10 +1891,10 @@ export class WorldScene {
     if (!this.flight) {
       this.updateTurn(delta);
       this.updateMovement(delta);
-    } else if (!this.revealHeld) this.advanceFlight();
+    } else if (!this.revealPaused) this.advanceFlight();
 
     this.updateActivation(delta);
-    if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
     // Coalesces every pointermove since the last frame into one raycast, the way the
@@ -1852,6 +1952,8 @@ export class WorldScene {
     this.aimMaterial.dispose();
     this.unitBox.dispose();
     this.glowTexture.dispose();
+    this.labelPrimer.material.map?.dispose();
+    this.labelPrimer.material.dispose();
     this.renderer.dispose();
   }
 }
