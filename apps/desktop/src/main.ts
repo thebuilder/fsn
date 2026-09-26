@@ -8,9 +8,11 @@ import {
   canEditDesktopText,
   canOpenDesktopNative,
   ensureChildren,
+  measureDesktopDirectory,
   openDesktopDirectory,
   openDesktopNative,
   peekChildren,
+  readDesktopGitStatus,
   readDesktopResource,
   writeDesktopText,
 } from "./filesystem";
@@ -115,6 +117,9 @@ const platform: NavigatorPlatform = {
   },
   ensureChildren,
   peekChildren,
+  measureDirectory: measureDesktopDirectory,
+  // Only a picked folder has a native root for the backend to read; the demo never does.
+  gitStatus: async (filesystem) => (filesystem.isLocal ? readDesktopGitStatus() : null),
   disposeFilesystem: disposeDemoFilesystem,
   rememberDemo: async () => {
     await clearDesktopRoot();

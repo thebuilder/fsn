@@ -3,6 +3,7 @@ import type { FsNode } from "@fsn/core";
 import {
   disposeBrowserFilesystem,
   ensureChildren,
+  measureDirectory,
   peekChildren,
   readBrowserResource,
   registerBrowserGeneratedResource,
@@ -190,5 +191,60 @@ describe("browser filesystem adapter: metadata pool", () => {
     expect(failed?.size).toBeUndefined();
     expect(children.find((node) => node.name === "a.txt")?.size).toBe(1);
     expect(children.find((node) => node.name === "c.txt")?.size).toBe(3);
+  });
+});
+
+describe("browser filesystem adapter: measuring a folder", () => {
+  const sized = (name: string, size: number, lastModified = 1): [string, FakeFileEntry] =>
+    [name, fakeFile(name, () => Promise.resolve({ size, lastModified }))];
+
+  it("totals everything beneath a picked folder through its handles", async () => {
+    const deep = fakeDirectory("deep", [sized("c.bin", 3, 50)]);
+    const src = fakeDirectory("src", [sized("b.bin", 20), ["deep", deep]]);
+    const root = fakeDirectory("measure-root", [["src", src], sized("a.bin", 100)]);
+    const snapshot = await rootFromDirectoryHandle(root as unknown as FileSystemDirectoryHandle);
+    const srcNode = snapshot.root.children?.find((node) => node.name === "src");
+
+    const usage = await measureDirectory(srcNode!, new AbortController().signal);
+
+    expect(usage).toEqual({ bytes: 23, files: 2, directories: 1, newest: 50, complete: true });
+  });
+
+  it("counts a snapshot import from memory, with no handles to walk", async () => {
+    const files = [
+      { name: "a.txt", webkitRelativePath: "snap/docs/a.txt", size: 7, lastModified: 3 },
+      { name: "b.txt", webkitRelativePath: "snap/docs/deeper/b.txt", size: 5, lastModified: 9 },
+    ] as unknown as FileList;
+    const snapshot = rootFromFileList(files);
+    const docs = snapshot?.root.children?.[0];
+
+    const usage = await measureDirectory(docs!, new AbortController().signal);
+
+    expect(usage).toMatchObject({ bytes: 12, files: 2, complete: true });
+  });
+
+  it("gives up when cancelled rather than finishing the walk", async () => {
+    const controller = new AbortController();
+    const gate = deferred<void>();
+    const slow = fakeDirectory("slow", [sized("x.bin", 1)], { gate: gate.promise });
+    const root = fakeDirectory("cancel-root", [["slow", slow]]);
+    const snapshot = await rootFromDirectoryHandle(root as unknown as FileSystemDirectoryHandle);
+    const slowNode = snapshot.root.children?.[0];
+
+    const measuring = measureDirectory(slowNode!, controller.signal);
+    controller.abort();
+    gate.resolve();
+
+    await expect(measuring).rejects.toBeDefined();
+  });
+
+  it("names a peek's children so a marker can be matched to the object it stands for", async () => {
+    const sub = fakeDirectory("sub", [sized("one.ts", 1), sized("two.md", 2)]);
+    const root = fakeDirectory("peek-names-root", [["sub", sub]]);
+    const snapshot = await rootFromDirectoryHandle(root as unknown as FileSystemDirectoryHandle);
+
+    const peek = await peekChildren(snapshot.root.children![0]);
+
+    expect(peek.names).toEqual(["one.ts", "two.md"]);
   });
 });

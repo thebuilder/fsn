@@ -1,3 +1,5 @@
+import type { DirectoryUsage } from "./usage";
+
 export type FsKind = "file" | "directory";
 
 export type FileCategory =
@@ -37,6 +39,8 @@ export type FsNode = {
   demoCredit?: { text: string; href?: string };
   /** Cheap listing used to size and preview this directory from the outside. */
   peek?: DirectoryPeek;
+  /** Everything beneath this directory, once something has walked it to find out. */
+  usage?: DirectoryUsage;
 };
 
 /** What a directory looks like from the outside: how much it holds, and of what kinds. */
@@ -44,7 +48,29 @@ export type DirectoryPeek = {
   total: number;
   /** Category per child, in listing order, capped at `DIRECTORY_PEEK_LIMIT`. */
   categories: FileCategory[];
+  /**
+   * Name per child, aligned with `categories`, so a lens can say something about the
+   * child a marker stands for. Optional, because a peek only has to count to do its job.
+   */
+  names?: string[];
+  /** Modification time per child where the listing knew one, aligned with `categories`. */
+  modified?: (number | undefined)[];
 };
+
+/**
+ * The peek a directory's children already answer, for adapters that have read them. The
+ * names and times ride along so a marker on the plot can be coloured like the object it
+ * stands for.
+ */
+export function peekFromChildren(children: FsNode[]): DirectoryPeek {
+  const shown = children.slice(0, DIRECTORY_PEEK_LIMIT);
+  return {
+    total: children.length,
+    categories: shown.map(categoryOf),
+    names: shown.map((child) => child.name),
+    modified: shown.map((child) => child.modified),
+  };
+}
 
 /** No preview draws more markers than this, so there is nothing to gain by reading further. */
 export const DIRECTORY_PEEK_LIMIT = 64;

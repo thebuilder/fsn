@@ -6,6 +6,7 @@ import {
   directoryHandleFor,
   disposeBrowserFilesystem,
   ensureChildren,
+  measureDirectory,
   openBrowserDirectory,
   peekChildren,
   readBrowserResource,
@@ -42,6 +43,7 @@ const platform: NavigatorPlatform = {
   importSnapshot: rootFromFileList,
   ensureChildren,
   peekChildren,
+  measureDirectory,
   disposeFilesystem: disposeBrowserFilesystem,
   rememberDemo: async () => rememberSource({ mode: "demo" }),
   rememberFilesystem: async (filesystem) => {
