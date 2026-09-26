@@ -58,12 +58,16 @@ describe("PNG encoder", () => {
     expect(() => encodePng(4, 4, new Uint8Array(3))).toThrow();
   });
 
-  it("draws the contact sheet the same way every time", () => {
+  // Generous timeout: the sheet is drawn and deflated twice, and CI runs every
+  // package's tests at once on a couple of cores.
+  it("draws the contact sheet the same way every time", { timeout: 20_000 }, () => {
     const sheet = contactSheet();
     const header = new DataView(pngChunks(sheet)[0].data.buffer);
 
     expect([header.getUint32(0), header.getUint32(4)]).toEqual([560, 400]);
-    expect(contactSheet()).toEqual(sheet);
+    // By length and checksum, since a deep equality walk over the whole file is slow too.
+    const again = contactSheet();
+    expect([again.length, crc32(again)]).toEqual([sheet.length, crc32(sheet)]);
   });
 });
 

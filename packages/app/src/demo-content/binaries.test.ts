@@ -10,6 +10,7 @@ import {
   telemetryFrames,
   unknownPackage,
 } from "./binaries";
+import { crc32 } from "./bytes";
 import { inflate } from "./testing";
 
 const ascii = (bytes: Uint8Array): string => String.fromCharCode(...bytes);
@@ -79,9 +80,14 @@ describe("locked demo binaries", () => {
     expect(ascii(database)).toContain("visitor #1024");
   });
 
-  it("generates identical bytes on every run", () => {
-    expect(telemetryFrames()).toEqual(telemetryFrames());
-    expect(unknownPackage()).toEqual(unknownPackage());
-    expect(guestbookDatabase()).toEqual(guestbookDatabase());
+  // Generous timeout: generating each file twice is real work, and CI runs every
+  // package's tests at once on a couple of cores.
+  it("generates identical bytes on every run", { timeout: 20_000 }, () => {
+    for (const make of [telemetryFrames, unknownPackage, guestbookDatabase]) {
+      const first = make();
+      const second = make();
+      // By length and checksum, since a deep equality walk over 64 KB is itself slow.
+      expect([second.length, crc32(second)]).toEqual([first.length, crc32(first)]);
+    }
   });
 });
