@@ -78,18 +78,14 @@
     <div class="search-header">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
       <label class="visually-hidden" for="search-input" id="search-title">Search files</label>
-      <input id="search-input" type="search" placeholder="Search this directory and below…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
+      <input id="search-input" type="search" placeholder="Search everything…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
       <button class="key-button" type="submit" aria-label="Close search">ESC</button>
     </div>
-    <div class="search-scope">
-      <div class="scope-switch" id="scope-switch" role="group" aria-label="Search scope">
-        <button class="scope-button" id="scope-current" type="button" aria-pressed="true">This directory</button>
-        <button class="scope-button" id="scope-all" type="button" aria-pressed="false">Everywhere</button>
-      </div>
+    <div class="search-meta">
+      <p class="search-progress" id="search-progress"></p>
       <p class="search-count" id="search-count" aria-live="polite"></p>
     </div>
     <ul class="search-results" id="search-results" role="listbox" aria-label="Search results"></ul>
-    <button class="button button-secondary search-deepen" id="search-deepen" type="button" hidden>READ DEEPER</button>
   </form>
 </dialog>
 

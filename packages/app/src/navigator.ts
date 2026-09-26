@@ -2,14 +2,14 @@ import {
   categoryOf,
   formatBytes,
   formatDate,
+  indexChildren,
+  locationOf,
   pathFor,
-  searchFilesystem,
+  searchIndex,
   sortNodes,
-  unreadDirectoriesUnder,
   type FilesystemRoot,
   type FsNode,
-  type SearchMatch,
-  type SearchOutcome,
+  type IndexedObject,
 } from "@fsn/core";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
@@ -17,7 +17,9 @@ import { dismissOnOutsidePress } from "./light-dismiss";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
 import { readRoute, routeFor, sameRoute } from "./route";
 import { WorldScene, type NavigationDirection } from "./scene";
+import { TreeIndex } from "./tree-index";
 import { FileViewer } from "./viewer";
+import { el } from "./viewers/dom";
 
 export type NavigatorHandle = {
   /** Returns false when an active editor refuses to discard its unsaved changes. */
@@ -59,10 +61,7 @@ const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
 const searchCount = getElement<HTMLElement>("search-count");
-const searchDeepen = getElement<HTMLButtonElement>("search-deepen");
-const scopeSwitch = getElement<HTMLElement>("scope-switch");
-const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
-const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
+const searchProgress = getElement<HTMLElement>("search-progress");
 const helpDialog = getElement<HTMLDialogElement>("help-dialog");
 const helpButton = getElement<HTMLButtonElement>("help-button");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
@@ -513,6 +512,7 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
       if (lifecycle.signal.aborted || !viewer.close()) return { status: "rejected" };
       const previous = filesystem;
       filesystem = candidate;
+      forgetTreeIndex();
       ancestry = landing ?? [candidate.root];
       ancestryById.clear();
       const drawn = renderDirectory(!announcement, "initial", "replace");
@@ -631,166 +631,173 @@ function withdrawReopenOffer(): void {
 
 /** Results are capped so a broad query returns a readable list instead of the whole tree. */
 const searchResultLimit = 25;
-let searchScope: "current" | "all" = "current";
+/**
+ * The most objects the whole-tree index will hold. Plenty for a project and most of a
+ * home folder; past it, queries are answered from what the walk reached first, which
+ * its breadth-first order makes the shallower and likelier part of the tree.
+ */
+const SEARCH_INDEX_LIMIT = 50_000;
+/**
+ * Directory reads the index keeps in flight: enough that one slow handle stalls a slot
+ * rather than the walk, few enough not to crowd out the directory someone is opening.
+ */
+const SEARCH_INDEX_CONCURRENCY = 6;
+/** How often a growing index may re-rank an open dialog; any faster reads as flicker. */
+const SEARCH_PROGRESS_INTERVAL_MS = 250;
+
 let resultButtons: HTMLButtonElement[] = [];
+let resultEntries: IndexedObject[] = [];
+let resultKey = "";
 let activeResultIndex = -1;
 
-/** How many unread directories one click of READ DEEPER pulls in. */
-const SEARCH_DEEPEN_BATCH = 64;
-/** How many of those reads run at once, so one slow handle does not stall the rest of the batch. */
-const SEARCH_DEEPEN_CONCURRENCY = 8;
 /**
- * Directories this dialog session already tried to read — successfully or not. Scoped
- * to one dialog's lifetime and cleared on open, so a permission grant made after closing
- * search gets a fresh chance instead of being remembered as a dead end forever.
+ * The mounted source's index, started the first time search is opened on it rather than
+ * when the source mounts. Walking a whole tree costs a listing per directory — and in the
+ * browser a metadata read per file — which is worth paying for someone searching and not
+ * for someone who came to look at one folder. Once started it runs on in the background,
+ * dialog open or not, so the next search is answered from the whole tree.
  */
-const attemptedUnread = new Set<string>();
+let treeIndex: TreeIndex | null = null;
+let treeIndexController: AbortController | null = null;
+
+function indexForSearch(): TreeIndex {
+  if (treeIndex?.root === filesystem.root) return treeIndex;
+  forgetTreeIndex();
+  const controller = new AbortController();
+  const index = new TreeIndex(filesystem.root, {
+    read: (node) => platform.ensureChildren(node),
+    signal: controller.signal,
+    limit: SEARCH_INDEX_LIMIT,
+    concurrency: SEARCH_INDEX_CONCURRENCY,
+    onProgress: () => {
+      if (treeIndex === index) scheduleIndexRender();
+    },
+  });
+  treeIndex = index;
+  treeIndexController = controller;
+  return index;
+}
+
+/** Stops the walk over a source that is going away; its partial index goes with it. */
+function forgetTreeIndex(): void {
+  treeIndexController?.abort();
+  treeIndexController = null;
+  treeIndex = null;
+  window.clearTimeout(indexRenderTimer);
+  indexRenderTimer = 0;
+}
+
+let indexRenderTimer = 0;
+let lastSearchRender = 0;
+
+/**
+ * Lets an open dialog catch up with a growing index at a steady pace. The walk reports
+ * each time it yields, which on a fast source is every frame, and re-ranking that often
+ * would spend the very frames the walk just handed back.
+ */
+function scheduleIndexRender(): void {
+  if (!searchDialog.open || indexRenderTimer) return;
+  const wait = Math.max(0, lastSearchRender + SEARCH_PROGRESS_INTERVAL_MS - performance.now());
+  indexRenderTimer = window.setTimeout(() => {
+    indexRenderTimer = 0;
+    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value, true);
+  }, wait);
+}
 
 function openSearch(): void {
   searchInput.value = "";
-  attemptedUnread.clear();
-  applySearchScope(searchScope);
+  searchInput.placeholder = `Search all of ${filesystem.root.name}…`;
+  renderSearchResults("");
   searchDialog.showModal();
   searchInput.focus();
 }
 
-function applySearchScope(scope: "current" | "all"): void {
-  searchScope = scope;
-  const effective = effectiveSearchScope();
-  // At the root the two scopes cover the same tree, so offering the choice is just noise.
-  scopeSwitch.hidden = ancestry.length === 1;
-  scopeCurrentButton.ariaPressed = String(effective === "current");
-  scopeAllButton.ariaPressed = String(effective === "all");
-  searchInput.placeholder = scopeSwitch.hidden || effective === "all"
-    ? "Search everything loaded…"
-    : "Search this directory and below…";
-  renderSearchResults(searchInput.value);
-}
-
-/** The stored preference survives a trip to the root, where it cannot mean anything. */
-function effectiveSearchScope(): "current" | "all" {
-  return ancestry.length === 1 ? "current" : searchScope;
-}
-
-function renderSearchResults(query: string): void {
-  searchResults.replaceChildren();
-  resultButtons = [];
+/**
+ * `keepActive` is for a list refreshed underneath someone — the index grew — where the
+ * row they had arrowed to should stay theirs. A new query starts again from the top.
+ */
+function renderSearchResults(query: string, keepActive = false): void {
+  lastSearchRender = performance.now();
+  const index = indexForSearch();
+  renderIndexProgress(index);
   const trimmed = query.trim();
-  const scope = effectiveSearchScope();
 
   if (!trimmed) {
     // An empty box browses the level you are standing on; listing whole trees is noise.
-    // There is no search outcome to deepen here, so the button stays out of the way.
-    searchDeepen.hidden = true;
-    if (scope === "all") {
-      searchCount.textContent = "";
-      searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
-      setActiveResult(-1);
-      return;
-    }
     const children = currentChildren();
     searchCount.textContent = children.length > searchResultLimit
       ? `Showing ${searchResultLimit} of ${children.length} objects here`
       : `${children.length} ${children.length === 1 ? "object" : "objects"} here`;
-    renderMatches(children.slice(0, searchResultLimit).map((node) => ({ node, trail: ancestry })));
+    renderMatches(indexChildren(ancestry, children.slice(0, searchResultLimit)), false, keepActive);
     return;
   }
 
-  // Both scopes search nested directories; they differ only in where the walk starts.
-  const base = scope === "all" ? [filesystem.root] : ancestry;
-  const outcome = searchFilesystem(base, trimmed, { limit: searchResultLimit });
-  searchCount.textContent = describeOutcome(outcome);
-  renderMatches(outcome.matches);
-  updateDeepenButton(outcome, scope);
+  const outcome = searchIndex(index.entries, trimmed, { limit: searchResultLimit, here: currentDirectory().id });
+  const total = outcome.total.toLocaleString("en-US");
+  searchCount.textContent = outcome.total > outcome.matches.length
+    ? `Showing ${outcome.matches.length} of ${total}, refine to narrow`
+    : `${total} ${outcome.total === 1 ? "match" : "matches"}`;
+  renderMatches(outcome.matches, true, keepActive);
 }
 
 /**
- * Shows READ DEEPER only when there is somewhere left to read: the search itself
- * reported unread directories, and the frontier under this scope (minus whatever this
- * dialog session already tried) is not empty. The bounded walk below is what the click
- * would read anyway, so computing it here is not a second full search — it is capped at
- * the same batch size and doubles as the count in the button's label.
+ * Kept apart from the match count, and out of its live region: the count is the answer
+ * to what was typed and worth announcing, while this ticks over several times a second
+ * for as long as the walk runs and would drown it out.
  */
-function updateDeepenButton(outcome: SearchOutcome, scope: "current" | "all"): void {
-  if (outcome.unreadDirectories === 0) {
-    searchDeepen.hidden = true;
-    return;
-  }
-  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
-  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
-  searchDeepen.hidden = frontier.length === 0;
-  if (frontier.length > 0) {
-    searchDeepen.textContent = `READ ${Math.min(frontier.length, SEARCH_DEEPEN_BATCH)} MORE DIRECTORIES`;
-  }
+function renderIndexProgress(index: TreeIndex): void {
+  const count = index.entries.length;
+  const objects = `${count.toLocaleString("en-US")} ${count === 1 ? "object" : "objects"}`;
+  const unreadable = index.unreadable
+    ? ` · ${index.unreadable} ${index.unreadable === 1 ? "directory" : "directories"} unreadable`
+    : "";
+  searchProgress.dataset.state = index.status;
+  searchProgress.textContent = index.status === "indexing"
+    ? `Indexed ${objects}…${unreadable}`
+    : index.status === "capped"
+      ? `Index stops at ${objects}${unreadable}`
+      : `${objects} indexed${unreadable}`;
 }
 
-/**
- * Reads a batch of the unread frontier through the platform adapter, then re-runs the
- * query so results, counts and the button itself all catch up to what got read. A
- * directory that fails (denied, vanished) just stays unread — it is marked attempted so
- * this session will not spend another read on it.
- */
-async function deepenSearch(): Promise<void> {
-  const scope = effectiveSearchScope();
-  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
-  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
-  if (!frontier.length) return;
-  for (const node of frontier) attemptedUnread.add(node.id);
-  searchDeepen.disabled = true;
-  const settle = beginPending();
-  try {
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < frontier.length) {
-        const node = frontier[next];
-        next += 1;
-        try {
-          await platform.ensureChildren(node);
-        } catch {
-          // Swallowed: a denied or vanished directory just stays unread, and
-          // attemptedUnread already keeps this session from retrying it.
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(SEARCH_DEEPEN_CONCURRENCY, frontier.length) }, worker));
-  } finally {
-    settle();
-    searchDeepen.disabled = false;
-    // A read that lands after the dialog closed only warms the cache — no DOM to update.
-    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value);
-  }
-}
-
-function renderMatches(matches: SearchMatch[]): void {
-  if (!matches.length) {
-    searchResults.append(emptyResult("NO MATCHING OBJECTS"));
+function renderMatches(entries: IndexedObject[], showLocation: boolean, keepActive: boolean): void {
+  // A growing index re-ranks to the same list most of the time; rebuilding identical rows
+  // would only flicker under the pointer and throw away the row being hovered.
+  const key = `${showLocation}\n${entries.map((entry) => entry.node.id).join("\n")}`;
+  if (entries.length && key === resultKey) return;
+  const activeId = keepActive ? resultEntries[activeResultIndex]?.node.id : undefined;
+  resultKey = key;
+  resultEntries = entries;
+  resultButtons = [];
+  searchResults.replaceChildren();
+  if (!entries.length) {
+    searchResults.append(emptyResult(treeIndex?.status === "indexing" ? "NO MATCHES YET · STILL INDEXING" : "NO MATCHING OBJECTS"));
     setActiveResult(-1);
     return;
   }
-  matches.forEach((match, index) => {
-    const { node, trail } = match;
-    const item = document.createElement("li");
-    const button = document.createElement("button");
+  entries.forEach((entry, index) => {
+    const { node } = entry;
+    const item = el("li");
+    const button = el("button");
     button.type = "button";
     button.id = `search-result-${index}`;
     button.role = "option";
-    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small></small></span><kbd class="key-glyph">↵</kbd>`;
-    const strong = button.querySelector("strong");
-    if (strong) strong.textContent = node.name;
-    const detail = button.querySelector("small");
+    const glyph = el("i", `result-glyph category-${categoryOf(node)}`);
+    glyph.ariaHidden = "true";
     const measure = node.kind === "directory" ? `${node.children?.length ?? "?"} objects` : formatBytes(node.size);
-    if (detail) {
-      const elsewhere = trail[trail.length - 1].id !== currentDirectory().id;
-      detail.textContent = elsewhere ? `${measure} · ${trail.map((part) => part.name).join("/")}` : measure;
-    }
-    button.addEventListener("click", () => void revealMatch(match), listener);
+    const detail = el("small", undefined, measure);
+    if (showLocation) detail.append(" · ", el("span", "result-location", locationOf(entry)));
+    const text = el("span");
+    text.append(el("strong", undefined, node.name), detail);
+    button.append(glyph, text, el("kbd", "key-glyph", "↵"));
+    button.addEventListener("click", () => void revealMatch(entry), listener);
     // Keep pointer and keyboard on the same row, so there is only ever one highlight.
     button.addEventListener("pointerenter", () => setActiveResult(index), listener);
     item.append(button);
     searchResults.append(item);
     resultButtons.push(button);
   });
-  setActiveResult(0);
+  const kept = activeId === undefined ? -1 : entries.findIndex((entry) => entry.node.id === activeId);
+  setActiveResult(Math.max(kept, 0));
 }
 
 /** Highlights a result without moving focus; the input keeps it so typing never breaks. */
@@ -812,44 +819,37 @@ function moveActiveResult(step: number): void {
   setActiveResult(next);
 }
 
-function describeOutcome(outcome: SearchOutcome): string {
-  const counted = `${outcome.complete ? "" : "over "}${outcome.total}`;
-  const headline = outcome.total > outcome.matches.length
-    ? `Showing ${outcome.matches.length} of ${counted}, refine to narrow`
-    : `${counted} ${outcome.total === 1 ? "match" : "matches"}`;
-  // Local directories load lazily, so say plainly which part of the tree was not looked at.
-  return outcome.unreadDirectories > 0
-    ? `${headline} · ${outcome.unreadDirectories} unopened ${outcome.unreadDirectories === 1 ? "directory" : "directories"} not indexed`
-    : headline;
-}
-
 function emptyResult(message: string): HTMLLIElement {
-  const empty = document.createElement("li");
-  empty.className = "search-empty";
-  empty.textContent = message;
-  return empty;
+  return el("li", "search-empty", message);
 }
 
 /**
- * A result is a destination, not a highlight: picking one does what double-clicking the
- * object in the world would do. The directory holding it is travelled to first, since a
- * match from elsewhere in the tree has no district on screen to open anything in.
+ * A result is a destination, not a highlight: the directory holding it is travelled to,
+ * since a match from elsewhere in the tree has no district on screen to show it in, and
+ * then the object is framed and selected there.
  *
- * That travel is awaited rather than fired off. Building a district takes the camera and
+ * A directory goes one step further and is entered, because that is the only thing to
+ * do with one. A file stops at being selected: now that search reaches the whole tree, a
+ * result is often somewhere never visited, and landing beside it — seeing what it sits
+ * among — is the point of flying there. Opening it is then one more press away.
+ *
+ * The travel is awaited rather than fired off. Building a district takes the camera and
  * clears the selection, so a match framed before it lands is a match it un-frames.
  */
-async function revealMatch(match: SearchMatch): Promise<void> {
+async function revealMatch(entry: IndexedObject): Promise<void> {
   searchDialog.close();
-  const destination = match.trail[match.trail.length - 1];
+  const destination = entry.trail[entry.trail.length - 1];
   if (destination.id !== currentDirectory().id) {
-    const direction: NavigationDirection = match.trail.length > ancestry.length ? "forward" : "backward";
-    ancestry = [...match.trail];
+    const direction: NavigationDirection = entry.trail.length > ancestry.length ? "forward" : "backward";
+    ancestry = [...entry.trail];
     await renderDirectory(true, direction);
   }
-  // Frame it, then open it. What opening means is `openNode`'s question to answer, and a
-  // directory answers it by flying into itself, which takes the camera off the approach.
-  world.focusNode(match.node);
-  await openNode(match.node);
+  world.focusNode(entry.node);
+  if (entry.node.kind === "directory") {
+    await openNode(entry.node);
+    return;
+  }
+  if (selectedNode?.id === entry.node.id) setStatus(`Found ${entry.node.name} in ${locationOf(entry)}`);
 }
 
 function trimName(name: string, length: number): string {
@@ -881,7 +881,6 @@ demoButton.addEventListener("click", () => {
 }, listener);
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
 searchButton.addEventListener("click", openSearch, listener);
-searchDeepen.addEventListener("click", () => void deepenSearch(), listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
 // Escape is the desktop way out of these, and pressing the page behind them is the
 // same gesture for a hand that has no Escape key to reach for.
@@ -906,14 +905,6 @@ searchDialog.addEventListener("keydown", (event) => {
     event.preventDefault();
     active.click();
   }
-}, listener);
-scopeCurrentButton.addEventListener("click", () => {
-  applySearchScope("current");
-  searchInput.focus();
-}, listener);
-scopeAllButton.addEventListener("click", () => {
-  applySearchScope("all");
-  searchInput.focus();
 }, listener);
 folderFallback.addEventListener("change", () => {
   if (!folderFallback.files || !platform.importSnapshot) return;
@@ -1110,6 +1101,7 @@ return {
   destroy: () => {
     if (destroyPromise) return destroyPromise;
     lifecycle.abort();
+    forgetTreeIndex();
     document.documentElement.removeAttribute("data-selection");
     sourceTransition.invalidate();
     renderGeneration += 1;

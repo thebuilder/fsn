@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canReadAsText, categoryOf, formatBytes, hasBytes, mediaExtensionSets, mimeTypeFor, pathFor, searchFilesystem, unreadDirectoriesUnder, type FsNode } from "./filesystem";
+import { canReadAsText, categoryOf, formatBytes, hasBytes, mediaExtensionSets, mimeTypeFor, pathFor, type FsNode } from "./filesystem";
 
 function directory(name: string, children: FsNode[]): FsNode {
   return { id: name, parentId: null, name, kind: "directory", children };
@@ -7,14 +7,6 @@ function directory(name: string, children: FsNode[]): FsNode {
 
 function file(name: string): FsNode {
   return { id: name, parentId: null, name, kind: "file", size: 1 };
-}
-
-function fixtureTree(): FsNode {
-  return directory("root", [
-    directory("src", [file("scene.ts"), file("main.ts"), directory("deep", [file("main-worker.ts")])]),
-    { id: "unopened", parentId: "root", name: "unopened", kind: "directory" },
-    file("readme.md"),
-  ]);
 }
 
 describe("filesystem utilities", () => {
@@ -84,159 +76,26 @@ describe("filesystem utilities", () => {
   });
 });
 
-describe("filesystem search", () => {
-  it("reaches nested directories and reports each match's trail", () => {
-    const root = fixtureTree();
-
-    const outcome = searchFilesystem([root], "main", { limit: 10 });
-
-    expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "main-worker.ts"]);
-    expect(outcome.matches[1].trail.map((part) => part.name)).toEqual(["root", "src", "deep"]);
-    expect(outcome.total).toBe(2);
-  });
-
-  it("searches only the subtree under the given directory", () => {
-    const root = fixtureTree();
-    const src = root.children?.[0] as FsNode;
-
-    const outcome = searchFilesystem([root, src], "e", { limit: 10 });
-
-    // "readme.md" sits above src, so it stays out of a search started inside it.
-    expect(outcome.matches.map((match) => match.node.name)).toEqual(["deep", "scene.ts", "main-worker.ts"]);
-  });
-
-  it("ranks prefix matches above matches buried inside a name", () => {
-    const root = directory("root", [file("zz-main.ts"), file("main.ts")]);
-
-    const outcome = searchFilesystem([root], "main", { limit: 10 });
-
-    expect(outcome.matches.map((match) => match.node.name)).toEqual(["main.ts", "zz-main.ts"]);
-  });
-
-  it("prefers shallow matches when ranking is otherwise tied", () => {
-    const root = directory("root", [directory("nested", [file("report.md")]), file("report.md")]);
-
-    const outcome = searchFilesystem([root], "report", { limit: 10 });
-
-    expect(outcome.matches.map((match) => match.trail.length)).toEqual([1, 2]);
-  });
-
-  it("caps returned matches while still counting every match", () => {
-    const root = directory("root", Array.from({ length: 40 }, (_, index) => file(`log-${index}.txt`)));
-
-    const outcome = searchFilesystem([root], "log", { limit: 25 });
-
-    expect(outcome.matches).toHaveLength(25);
-    expect(outcome.total).toBe(40);
-  });
-
-  it("counts directories that have not been read instead of reaching for disk", () => {
-    const root = fixtureTree();
-
-    const outcome = searchFilesystem([root], "ts", { limit: 10 });
-
-    expect(outcome.unreadDirectories).toBe(1);
-    expect(outcome.complete).toBe(true);
-  });
-
-  it("ranks by match quality, not by the walk order of deliberately unsorted siblings", () => {
-    // Children are authored out of alphabetical order and mix directories/files, standing
-    // in for an adapter that (hypothetically) did not pre-sort — the walk no longer sorts
-    // them itself, so result quality must come entirely from the final ranking pass.
-    const root = directory("root", [
-      file("xx-report.txt"),
-      directory("b-dir", [file("report-notes.md")]),
-      file("report.md"),
-      directory("a-dir", [file("has-report-inside.txt")]),
-    ]);
-
-    const outcome = searchFilesystem([root], "report", { limit: 10 });
-
-    // Prefix matches ("report.md", "report-notes.md") rank ahead of word-start matches
-    // ("xx-report.txt", "has-report-inside.txt"); within each rank, the shallower trail
-    // wins — exactly the ordering the final comparator promises, independent of walk order.
-    expect(outcome.matches.map((match) => match.node.name)).toEqual([
-      "report.md",
-      "report-notes.md",
-      "xx-report.txt",
-      "has-report-inside.txt",
-    ]);
-  });
-
-  it("still trips the visit ceiling on an oversized tree without sorting each directory", () => {
-    // One directory holding more entries than the visit limit is enough to prove the
-    // ceiling still trips promptly now that per-directory sorting is gone from the walk.
-    const root = directory("root", Array.from({ length: 20500 }, (_, index) => file(`f-${index}.txt`)));
-
-    const start = performance.now();
-    const outcome = searchFilesystem([root], "nonexistent-query", { limit: 10 });
-    const elapsed = performance.now() - start;
-
-    expect(outcome.complete).toBe(false);
-    expect(elapsed).toBeLessThan(1000);
-  });
-
-  describe("unreadDirectoriesUnder", () => {
-    function unreadDir(name: string): FsNode {
-      return { id: name, parentId: null, name, kind: "directory" };
-    }
-
-    function frontierTree(): FsNode {
-      // Unread directories at three different depths, mixed in with read ones,
-      // so a breadth-first walk is the only way to get shallowest-first output.
-      return directory("root", [
-        directory("readA", [unreadDir("unreadA1")]),
-        unreadDir("unreadB"),
-        directory("readC", [directory("readD", [unreadDir("unreadC1")])]),
-      ]);
-    }
-
-    it("returns the unread frontier shallowest-first", () => {
-      const frontier = unreadDirectoriesUnder(frontierTree(), 10);
-
-      expect(frontier.map((node) => node.name)).toEqual(["unreadB", "unreadA1", "unreadC1"]);
-    });
-
-    it("stops at the limit", () => {
-      const frontier = unreadDirectoriesUnder(frontierTree(), 2);
-
-      expect(frontier.map((node) => node.name)).toEqual(["unreadB", "unreadA1"]);
-    });
-
-    it("returns nothing for a fully-read tree", () => {
-      const root = directory("root", [directory("a", []), directory("b", [directory("c", [])])]);
-
-      expect(unreadDirectoriesUnder(root, 10)).toEqual([]);
-    });
-
-    it("skips excluded directories", () => {
-      const frontier = unreadDirectoriesUnder(frontierTree(), 10, new Set(["unreadB"]));
-
-      expect(frontier.map((node) => node.name)).toEqual(["unreadA1", "unreadC1"]);
-    });
-  });
-
-  describe("mimeTypeFor", () => {
-    it("gives every media extension a concrete MIME type, not the generic fallback", () => {
-      for (const [family, extensions] of Object.entries(mediaExtensionSets)) {
-        for (const extension of extensions) {
-          const mime = mimeTypeFor(`x.${extension}`);
-          expect(mime, `${family} extension "${extension}"`).not.toBe("application/octet-stream");
-          if (family === "image") {
-            // Audio/video share containers across families (e.g. `weba` is audio/webm,
-            // `ogv` is video/ogg), so only image types can be asserted by prefix here.
-            expect(mime, `${family} extension "${extension}"`).toMatch(/^image\//);
-          }
+describe("mimeTypeFor", () => {
+  it("gives every media extension a concrete MIME type, not the generic fallback", () => {
+    for (const [family, extensions] of Object.entries(mediaExtensionSets)) {
+      for (const extension of extensions) {
+        const mime = mimeTypeFor(`x.${extension}`);
+        expect(mime, `${family} extension "${extension}"`).not.toBe("application/octet-stream");
+        if (family === "image") {
+          // Audio/video share containers across families (e.g. `weba` is audio/webm,
+          // `ogv` is video/ogg), so only image types can be asserted by prefix here.
+          expect(mime, `${family} extension "${extension}"`).toMatch(/^image\//);
         }
       }
-    });
+    }
+  });
 
-    it("pins the jfif regression that once desynced desktop's hand-maintained MIME map from core's classification", () => {
-      expect(mimeTypeFor("photo.jfif")).toBe("image/jpeg");
-    });
+  it("pins the jfif regression that once desynced desktop's hand-maintained MIME map from core's classification", () => {
+    expect(mimeTypeFor("photo.jfif")).toBe("image/jpeg");
+  });
 
-    it("falls back to a generic type for names with no usable extension", () => {
-      expect(mimeTypeFor("Makefile")).toBe("application/octet-stream");
-    });
+  it("falls back to a generic type for names with no usable extension", () => {
+    expect(mimeTypeFor("Makefile")).toBe("application/octet-stream");
   });
 });
