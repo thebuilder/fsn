@@ -1594,10 +1594,10 @@ export class WorldScene {
     const intro = this.intro;
     if (!intro) return true;
     if (intro.mode === "scan") return this.applyScan(intro.area, intro.area.scan, elapsed);
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    const rotation = new THREE.Quaternion();
+    const matrix = this.scratchMatrix;
+    const position = this.scratchVector;
+    const scale = INTRO_SCALE;
+    const rotation = NO_ROTATION;
     let settled = true;
 
     intro.area.placements.forEach((placement) => {
@@ -2194,13 +2194,13 @@ export class WorldScene {
   };
 
   private updateMovement(delta: number): void {
-    const desired = new THREE.Vector3();
+    const desired = MOVE_DESIRED.set(0, 0, 0);
     if (this.movement.size) {
-      const forward = new THREE.Vector3();
+      const forward = MOVE_FORWARD;
       this.camera.getWorldDirection(forward);
       forward.y = 0;
       forward.normalize();
-      const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
+      const right = MOVE_RIGHT.crossVectors(forward, this.camera.up).normalize();
       // Alt swaps the two clusters outright, so whichever one is not turning is here.
       const held = (fly: string, arrow: string): boolean => this.movement.has(this.swapped ? arrow : fly);
       if (held("KeyW", "ArrowUp")) desired.add(forward);
@@ -2219,7 +2219,7 @@ export class WorldScene {
       this.velocity.set(0, 0, 0);
       return;
     }
-    const step = this.velocity.clone().multiplyScalar(delta);
+    const step = MOVE_STEP.copy(this.velocity).multiplyScalar(delta);
     this.camera.position.add(step);
     this.controls.target.add(step);
   }
@@ -2361,6 +2361,18 @@ function plotFootprint(placement: Placement): LinkFootprint {
 function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
+
+/**
+ * Scratch objects for the paths that run every frame: the rise, and flying on the keys.
+ * Each is written in full before it is read, and nothing holds on to one across frames,
+ * so sharing them spares the collector a steady trickle of garbage that a phone feels as
+ * the occasional dropped frame.
+ */
+const INTRO_SCALE = new THREE.Vector3();
+const MOVE_DESIRED = new THREE.Vector3();
+const MOVE_FORWARD = new THREE.Vector3();
+const MOVE_RIGHT = new THREE.Vector3();
+const MOVE_STEP = new THREE.Vector3();
 
 const TURN_OFFSET = new THREE.Vector3();
 const TURN_SPHERICAL = new THREE.Spherical();
