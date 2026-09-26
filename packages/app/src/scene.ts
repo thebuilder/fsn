@@ -12,6 +12,7 @@ import {
   type Placement,
 } from "./layout";
 import { LinkNetwork, type LinkFootprint } from "./links";
+import { ThumbnailLoader, type ReadFile } from "./thumbnails";
 import {
   createScanCage,
   createScanDepthMaterial,
@@ -34,6 +35,12 @@ type SceneCallbacks = {
   onSwapKeys: (swapped: boolean) => void;
   /** The camera flew into a directory the user had already visited. */
   onEnterArea: (directoryId: string) => void;
+  /**
+   * Reads a file's bytes, for the pictures laid on image roofs. The navigator hands over
+   * this one capability rather than the platform, so the scene can read and do nothing
+   * else; without it the roofs simply stay plain.
+   */
+  readFile?: ReadFile;
 };
 
 export type NavigationDirection = "initial" | "forward" | "backward";
@@ -391,6 +398,9 @@ export class WorldScene {
   private readonly labelPrimer = makeLabel("", "#000000");
   /** Wires from each visited folder's plot to its district; outside every area's group. */
   private readonly links = new LinkNetwork();
+  private readonly thumbnails: ThumbnailLoader;
+  /** The district whose roofs were last asked for, so each arrival asks exactly once. */
+  private thumbnailArea: DirectoryArea | null = null;
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -474,6 +484,8 @@ export class WorldScene {
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Roofs are seen at a slant from almost every angle the camera flies at.
+    this.thumbnails = new ThumbnailLoader(callbacks.readFile, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
 
     this.scene.background = new THREE.Color(BACKDROP);
     this.scene.fog = new THREE.Fog(BACKDROP, 110, 520);
@@ -565,6 +577,9 @@ export class WorldScene {
     // for: choosing the demo from the welcome screen, which already shows the demo,
     // recompiled everything and froze a phone for over a second.
     const retired = direction === "initial" ? this.detachWorld() : [];
+    // Whatever was being read for the last district's roofs is no longer being looked at.
+    this.thumbnails.cancel();
+    this.thumbnailArea = null;
 
     let area = this.areas.get(directory.id);
     let isNew = false;
@@ -615,6 +630,8 @@ export class WorldScene {
     // Both ends go: the wire in, and the wires out from plots that are about to be
     // replaced. The rebuild lays them again from the new layout.
     this.links.dropArea(directoryId);
+    this.thumbnails.forgetArea(directoryId);
+    if (this.thumbnailArea === area) this.thumbnailArea = null;
     this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
 
     if (this.intro?.area === area) {
@@ -1059,6 +1076,23 @@ export class WorldScene {
   /** How lit a district is, for the things drawn between or on top of districts. */
   private activationOf = (areaId: string): number => this.areas.get(areaId)?.activation ?? 0;
 
+  /**
+   * Asks for the active district's pictures once its reveal is over and the camera has
+   * landed, not while either plays. Decoding happens off the thread, but reading does not
+   * always: a source that has to produce its bytes (the demo draws and deflates its PNG in
+   * the page) spends real time on the main thread, and a hitch is far less noticeable in
+   * a still view than in a moving one. A roof dressed before the scan has found its tower
+   * would also float a picture over empty ground.
+   */
+  private updateThumbnails(): void {
+    const area = this.currentArea;
+    if (area && area !== this.thumbnailArea && !this.intro && !this.flight && !this.revealPaused) {
+      this.thumbnailArea = area;
+      this.thumbnails.request(area.id, area.group, area.placements, this.camera.position);
+    }
+    this.thumbnails.update(performance.now(), this.activationOf);
+  }
+
   /** Eases every area towards its activation target so directories cross-fade. */
   private updateActivation(delta: number): void {
     const step = 1 - Math.pow(EASE_ACTIVATION, delta);
@@ -1296,7 +1330,7 @@ export class WorldScene {
 
   /** Stand-ins for everything drawn with a program no district's own objects compile. */
   private primers(): THREE.Object3D[] {
-    return [this.labelPrimer, this.links.primer];
+    return [this.labelPrimer, this.links.primer, this.thumbnails.primer];
   }
 
   private startIntro(area: DirectoryArea): void {
@@ -1557,6 +1591,9 @@ export class WorldScene {
     // Wires are not part of any area's group, so they are not handed back to be freed
     // later; nothing is waiting on their program, which the primer keeps alive.
     this.links.clear();
+    // The pictures themselves go with their groups; only the bookkeeping is dropped here.
+    this.thumbnails.forgetAll();
+    this.thumbnailArea = null;
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
@@ -1684,6 +1721,7 @@ export class WorldScene {
     this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, placement.scale);
     mesh.setMatrixAt(placement.instanceIndex, this.scratchMatrix);
     mesh.instanceMatrix.needsUpdate = true;
+    this.thumbnails.lift(placement, lift);
 
     // A plot lifting out from under its own markers would tear the preview apart.
     placement.decor.forEach((decor) => {
@@ -1960,6 +1998,7 @@ export class WorldScene {
 
     this.updateActivation(delta);
     this.links.update(delta, this.revealPaused, this.activationOf);
+    this.updateThumbnails();
     if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
@@ -2021,6 +2060,7 @@ export class WorldScene {
     this.labelPrimer.material.map?.dispose();
     this.labelPrimer.material.dispose();
     this.links.dispose();
+    this.thumbnails.dispose();
     this.renderer.dispose();
   }
 }

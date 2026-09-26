@@ -107,6 +107,7 @@ const world = new WorldScene(canvas, {
   onKeyboardNavigation: (active) => reticle.classList.toggle("is-keyboard-active", active),
   onSwapKeys: (swapped) => controls.classList.toggle("is-swapped", swapped),
   onEnterArea: adoptArea,
+  readFile: (node, signal) => platform.viewer.read(node, signal),
 });
 
 function currentDirectory(): FsNode {
