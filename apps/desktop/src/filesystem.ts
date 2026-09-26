@@ -3,10 +3,13 @@ import {
   DIRECTORY_PEEK_LIMIT,
   categoryOf,
   mimeTypeFor,
+  peekFromChildren,
   sortNodes,
   type DirectoryPeek,
+  type DirectoryUsage,
   type FilesystemRoot,
   type FsNode,
+  type GitStatusReport,
 } from "@fsn/core";
 
 const MAX_BROWSER_READ_BYTES = 256 * 1024 * 1024;
@@ -136,10 +139,7 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   if (node.peek) return node.peek;
   if (node.kind !== "directory") return { total: 0, categories: [] };
   if (node.children) {
-    node.peek = {
-      total: node.children.length,
-      categories: node.children.slice(0, DIRECTORY_PEEK_LIMIT).map(categoryOf),
-    };
+    node.peek = peekFromChildren(node.children);
     return node.peek;
   }
 
@@ -151,9 +151,10 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   const read = (async () => {
     try {
       const entries = await invoke<NativeEntry[]>("read_dir_native", { path });
+      const shown = entries.slice(0, DIRECTORY_PEEK_LIMIT);
       node.peek = {
         total: entries.length,
-        categories: entries.slice(0, DIRECTORY_PEEK_LIMIT).map((entry) =>
+        categories: shown.map((entry) =>
           categoryOf({
             id: entry.path,
             parentId: node.id,
@@ -161,6 +162,10 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
             kind: entry.isDirectory && !entry.isSymlink && !entry.isNativeBundle ? "directory" : "file",
           }),
         ),
+        // The native listing already stat'ed every entry, so the markers get their
+        // names and times for free.
+        names: shown.map((entry) => entry.name),
+        modified: shown.map((entry) => entry.modified ?? undefined),
       };
     } catch {
       node.peek = { total: 0, categories: [] };
@@ -173,6 +178,27 @@ export async function peekChildren(node: FsNode): Promise<DirectoryPeek> {
   } finally {
     peekInFlight.delete(node.id);
   }
+}
+
+type NativeUsage = Omit<DirectoryUsage, "newest"> & { newest: number | null };
+
+/**
+ * Totals everything beneath a directory through the native walk, which validates the
+ * path against the active root, never follows links, and caps itself. The IPC call
+ * cannot be recalled once sent, so cancelling only discards its answer.
+ */
+export async function measureDesktopDirectory(node: FsNode, signal: AbortSignal): Promise<DirectoryUsage> {
+  const path = desktopDirectoryPath(node);
+  if (!path) throw new Error("This directory has no native path in the current session.");
+  signal.throwIfAborted();
+  const usage = await invoke<NativeUsage>("measure_dir_native", { path });
+  signal.throwIfAborted();
+  return { ...usage, newest: usage.newest ?? undefined };
+}
+
+/** The active root's git status; the backend decides the root, so nothing is passed. */
+export async function readDesktopGitStatus(): Promise<GitStatusReport | null> {
+  return invoke<GitStatusReport | null>("git_status_native");
 }
 
 export async function readDesktopResource(

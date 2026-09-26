@@ -1,4 +1,4 @@
-import type { DirectoryPeek, FilesystemRoot, FsNode } from "@fsn/core";
+import type { DirectoryPeek, DirectoryUsage, FilesystemRoot, FsNode, GitStatusReport } from "@fsn/core";
 import type { DemoResourceFactory } from "./demo";
 import type { ViewerIO } from "./viewer";
 
@@ -26,6 +26,18 @@ export type NavigatorPlatform = {
   importSnapshot?(files: FileList): FilesystemRoot | null;
   ensureChildren(node: FsNode): Promise<FsNode[]>;
   peekChildren(node: FsNode): Promise<DirectoryPeek>;
+  /**
+   * Totals everything beneath a directory for the disk-usage lens. It is a walk of the
+   * whole subtree, so it must run without holding the frame, stop when `signal` aborts,
+   * and give up at a cap of its own with `complete: false` rather than run unbounded.
+   * Optional: without it, the navigator can only total trees already held in memory.
+   */
+  measureDirectory?(node: FsNode, signal: AbortSignal, onProgress?: (usage: DirectoryUsage) => void): Promise<DirectoryUsage>;
+  /**
+   * The git status of the open folder, or null when it is not inside a work tree. Only a
+   * platform that can read a repository without running anything it configures offers it.
+   */
+  gitStatus?(filesystem: FilesystemRoot): Promise<GitStatusReport | null>;
   /** Releases adapter-owned resources from the source being replaced. */
   disposeFilesystem?(filesystem: FilesystemRoot): void | Promise<void>;
   rememberDemo(): Promise<void>;

@@ -299,6 +299,30 @@
   .swatch-document { --swatch: var(--blue); }
   .swatch-archive { --swatch: #e6de6d; }
 
+  /* The lenses sit on top of the legend they rewrite, as two rows of one pressed-button
+     switch, so a lens reads as a setting of this panel rather than as another toolbar. */
+  .scope-switch { display: flex; gap: 1px; padding: 1px; background: var(--line); }
+  .scope-switch[hidden] { display: none; }
+  .scope-button { padding: 0.35rem 0.6rem; border: 0; background: #10201f; color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+  .scope-button:hover { color: #cfe6df; }
+  .scope-button[aria-pressed="true"] { background: rgba(134,250,221,.14); color: var(--phosphor); }
+  .legend:has(.lens-controls) { width: 13.25rem; }
+  .lens-controls { display: grid; gap: 0.45rem; margin-bottom: 0.8rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
+  .lens-row { display: grid; grid-template-columns: 3.3rem minmax(0, 1fr); align-items: center; gap: 0.4rem; }
+  .lens-row .scope-switch { justify-self: start; }
+  .lens-label { color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scope-button[hidden] { display: none; }
+  .scope-button:focus-visible { outline: 1px solid var(--phosphor); outline-offset: 1px; }
+  .lens-progress { display: flex; align-items: center; gap: 0.4rem; min-width: 0; margin: 0; color: var(--phosphor); font: 600 0.5rem/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
+  .lens-progress::before { width: 0.35rem; height: 0.35rem; flex: none; content: ""; border-radius: 50%; background: var(--phosphor); box-shadow: 0 0 6px var(--phosphor); animation: led-pulse 1.2s infinite; }
+  .lens-progress[hidden] { display: none; }
+  .legend li.legend-note { color: var(--muted); font-weight: 500; letter-spacing: 0.02em; text-transform: none; }
+  /* Only needed where the panel folds away; see the narrow layout below. */
+  .lens-button { position: relative; display: none; }
+  .lens-button[aria-expanded="true"] { border-color: var(--line-strong); background: rgba(24, 52, 48, 0.85); }
+  /* Measuring carries on while the panel is folded, so the button it folded behind says so. */
+  :root[data-measuring] .lens-button::after { position: absolute; top: 0.3rem; right: 0.3rem; width: 0.3rem; height: 0.3rem; content: ""; border-radius: 50%; background: var(--phosphor); box-shadow: 0 0 6px var(--phosphor); animation: led-pulse 1.2s infinite; }
+
   .controls {
     position: absolute;
     z-index: 4;
@@ -331,6 +355,13 @@
      must go on matching the Ctrl K beside it, so the glyph alone is scaled up and
      its line box held down to the letter’s, leaving both caps the same height. */
   kbd i { font-size: 1.38em; font-style: normal; line-height: 0.82; }
+  /* The lamp says which way the switch is set without leaning on the word alone: dark
+     and outlined when off, lit and haloed like the glow it stands for when on. */
+  .glow-button { gap: 0.4rem; }
+  .glow-button:hover { color: #cfe6df; }
+  .glow-lamp { width: 0.45rem; height: 0.45rem; border: 1px solid currentColor; border-radius: 50%; transition: background 140ms ease, box-shadow 140ms ease; }
+  .glow-button[aria-pressed="true"] { border-color: var(--line-strong); color: var(--phosphor); }
+  .glow-button[aria-pressed="true"] .glow-lamp { border-color: var(--phosphor-bright); background: var(--phosphor); box-shadow: 0 0 6px var(--phosphor), 0 0 12px rgba(134,250,221,.45); }
 
   .reticle { position: absolute; z-index: 2; top: 50%; left: 50%; width: 1.25rem; height: 1.25rem; visibility: hidden; opacity: 0; transform: translate(-50%,-50%); border: 1px solid rgba(134,250,221,.32); border-radius: 50%; pointer-events: none; transition: width 120ms ease, height 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease, visibility 0s linear 120ms; }
   .reticle.is-keyboard-active { visibility: visible; opacity: 1; transition-delay: 0s; }
@@ -457,13 +488,16 @@
   .search-header input { min-width: 0; border: 0; background: transparent; color: #fff; font: 500 1rem var(--mono); outline: 0; }
   .search-header input::placeholder { color: #638078; }
   .key-button { min-height: 1.7rem; padding: 0.35rem 0.45rem; border-color: var(--line); background: #10201f; color: var(--muted); font-size: 0.52rem; }
-  .search-scope { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line); }
-  .scope-switch { display: flex; gap: 1px; padding: 1px; background: var(--line); }
-  .scope-switch[hidden] { display: none; }
-  .scope-button { padding: 0.35rem 0.6rem; border: 0; background: #10201f; color: var(--muted); font: 650 0.55rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
-  .scope-button:hover { color: #cfe6df; }
-  .scope-button[aria-pressed="true"] { background: rgba(134,250,221,.14); color: var(--phosphor); }
-  /* Auto start-margin keeps the count against the trailing edge with or without the toggle. */
+  .search-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line); }
+  /* The index reports itself in the dimmest voice on the panel: it is background work,
+     and the count beside it is the thing being asked. A lamp beats while the walk runs
+     and goes steady when it ends, so "still looking" reads without any words. */
+  .search-progress { display: flex; align-items: center; gap: 0.45rem; margin: 0; color: #5f7d75; font: 0.55rem var(--mono); text-transform: uppercase; }
+  .search-progress::before { width: 0.4rem; height: 0.4rem; flex: none; content: ""; background: #3f6f64; }
+  .search-progress:empty { display: none; }
+  .search-progress[data-state="indexing"]::before { background: var(--phosphor); animation: caret-blink 0.9s steps(1) infinite; }
+  .search-progress[data-state="capped"]::before { background: var(--amber); }
+  /* Auto start-margin keeps the count against the trailing edge, and on its own line when narrow. */
   .search-count { margin: 0 0 0 auto; color: var(--muted); font: 0.55rem var(--mono); text-align: end; text-transform: uppercase; }
   .search-results { max-height: min(26rem, 60vh); overflow: auto; margin: 0; padding: 0.4rem; list-style: none; }
   .search-results button { width: 100%; display: grid; grid-template-columns: 2.1rem 1fr auto; align-items: center; gap: 0.75rem; padding: 0.7rem; background: transparent; text-align: start; cursor: pointer; }
@@ -472,14 +506,16 @@
   .search-results button.is-active { background: rgba(134,250,221,.12); box-shadow: inset 2px 0 0 var(--phosphor); }
   .search-results button.is-active kbd { border-color: var(--phosphor); color: var(--phosphor); }
   .result-glyph { width: 1.75rem; height: 1.75rem; }
-  .search-results span { display: grid; gap: 0.15rem; }
+  .search-results button > span { display: grid; min-width: 0; gap: 0.15rem; overflow-wrap: anywhere; }
   .search-results strong { color: #eaf6f2; font: 600 0.72rem var(--mono); }
   .search-results small { color: var(--muted); font: 0.55rem var(--mono); text-transform: uppercase; }
+  /* A path is a name, and names are case-sensitive: it keeps the case it has on disk
+     while the measure beside it keeps the panel's voice. */
+  .search-results .result-location { color: #8fb0a7; text-transform: none; }
   /* The return glyph gets more room still: it sits in a row of its own rather than
      in a strip of neighbouring caps, so nothing is there for it to line up with. */
   .search-results .key-glyph { min-width: 1.9rem; padding: 0.3rem 0.45rem; font-size: 0.85rem; }
   .search-empty { padding: 3rem; color: var(--muted); font: 650 0.64rem var(--mono); text-align: center; }
-  .search-deepen { width: calc(100% - 1.6rem); margin: 0 0.8rem 0.8rem; }
 
   /**
    * The manual reads as terminal output because that is the only voice this interface
@@ -791,6 +827,11 @@
   .scene-title { top: 7.5rem; }
   .details-panel { top: auto; bottom: 4.1rem; }
   .legend { display: none; }
+  /* The legend has no corner of its own at this width, so the lens button in the toolbar
+     unfolds it under the bar on request, and it folds away again as soon as the view is
+     touched. */
+  .lens-button { display: inline-flex; }
+  :root[data-lens-open] .legend { z-index: 11; top: 7rem; right: 0.6rem; bottom: auto; display: block; box-shadow: 0 1rem 3rem rgba(0,0,0,.4); }
   .controls { left: auto; right: 1rem; transform: none; }
   /* Boost is the one of the three worth losing first: it modifies a binding still on
      screen rather than naming one of its own. The manual button is never dropped. */

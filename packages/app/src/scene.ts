@@ -9,8 +9,24 @@ import {
   seededHash,
   type AreaLayout,
   type Decor,
+  type DirectorySize,
   type Placement,
 } from "./layout";
+import type { ColourLens } from "./lens";
+import { LinkNetwork, type LinkFootprint } from "./links";
+import { ThumbnailLoader, type ReadFile } from "./thumbnails";
+import { PhosphorBloom } from "./bloom";
+import {
+  createScanCage,
+  createScanDepthMaterial,
+  createScanUniforms,
+  installScan,
+  SCAN_COLOR,
+  scanPose,
+  solidReachesAt,
+  type CageBox,
+  type ScanUniforms,
+} from "./scan";
 
 type SceneCallbacks = {
   onSelect: (node: FsNode | null) => void;
@@ -22,6 +38,12 @@ type SceneCallbacks = {
   onSwapKeys: (swapped: boolean) => void;
   /** The camera flew into a directory the user had already visited. */
   onEnterArea: (directoryId: string) => void;
+  /**
+   * Reads a file's bytes, for the pictures laid on image roofs. The navigator hands over
+   * this one capability rather than the platform, so the scene can read and do nothing
+   * else; without it the roofs simply stay plain.
+   */
+  readFile?: ReadFile;
 };
 
 export type NavigationDirection = "initial" | "forward" | "backward";
@@ -32,20 +54,45 @@ type DirectoryArea = {
   center: THREE.Vector3;
   radius: number;
   peakHeight: number;
+  /** The listing this was laid out from, in its own order, so it can be laid out again. */
+  nodes: FsNode[];
+  /** The floor's rim, where a wire from the parent's plot comes in. */
+  footprint: LinkFootprint;
   placements: Placement[];
   /** Every mesh holding preview markers, so the reveal can flag one update per mesh. */
   decorMeshes: THREE.InstancedMesh[];
   pickMeshes: Map<THREE.InstancedMesh, Placement[]>;
   materials: THREE.Material[];
   labels: THREE.Sprite[];
+  /** False while the warm-up is still compiling this district's programs. */
+  ready: boolean;
   /** 1 = fully lit active directory, 0 = dimmed background directory. */
   activation: number;
   activationTarget: number;
+  /** Every area carries the scan's hooks; only an arrival switches them on. */
+  scan: AreaScan;
 };
 
+type AreaScan = {
+  uniforms: ScanUniforms;
+  /**
+   * Present only while a scan is still to play or playing. Removed and freed the
+   * moment it ends; the shader hooks stay, switched off.
+   */
+  cage: THREE.LineSegments | null;
+  /** Distance from the scan origin to the furthest corner of the district. */
+  reach: number;
+};
+
+/**
+ * A new district's reveal. Arriving in a filesystem is surveyed by the wireframe scan;
+ * walking into a directory within it raises the towers, which is quicker and keeps the
+ * scan an event rather than a toll paid on every double-click.
+ */
 type AreaIntro = {
   area: DirectoryArea;
   startedAt: number;
+  mode: "rise" | "scan";
 };
 
 type CameraFlight = {
@@ -93,6 +140,20 @@ const BACKDROP = 0x05090a;
 const GROUND_COLOR = 0x14262a;
 const RIM_COLOR = 0x0b171a;
 const PLOT_COLOR = 0x2c3a44;
+/**
+ * Under a lens, colour comes from each instance, so the glow a type material carries in
+ * its own hue would leak the type palette back into every tower. The lens glows in the
+ * plots' neutral instead, which lifts the shadowed faces without saying anything.
+ */
+const LENS_EMISSIVE = PLOT_COLOR;
+/**
+ * A plot under a lens is its lens colour, darkened: enough to read, not enough to drown
+ * the markers standing on it. Darkened rather than mixed with the neutral plot colour,
+ * because that is a cool grey-blue and mixing warm hues into it turns them olive.
+ */
+const PLOT_LENS_SHADE = 0.26;
+/** A name plate under a lens is never darker than this, whatever the lens paints its object. */
+const LABEL_MIN_LIGHTNESS = 0.55;
 
 const RIM_OVERHANG = 1.1;
 const RIM_HEIGHT = 0.22;
@@ -161,6 +222,8 @@ const DOUBLE_TAP_RADIUS = 36;
 /** Reveal: each object rises over INTRO_RISE, staggered outwards across INTRO_STAGGER. */
 const INTRO_RISE = 420;
 const INTRO_LABEL_FADE = 240;
+/** A name fades in over this long once the scan's solid front reaches its object. */
+const SCAN_LABEL_FADE = 520;
 /** How far ahead of its height an object's footprint opens: 4 means by the first quarter. */
 const INTRO_SPREAD_LEAD = 4;
 
@@ -187,6 +250,14 @@ const EASE_ACTIVATION = 0.02;
 const HOVER_LIFT = 0.35;
 /** How long the camera must stay inside an area before it takes over the UI. */
 const AREA_DWELL = 400;
+const SELECTION_COLOR = 0xf4ffd9;
+const AIM_COLOR = 0x7fffe0;
+/**
+ * How much hotter the outlines burn while the glow is up. Tone mapping holds every lit
+ * surface under the bloom's threshold, which is the point, but it holds a white line
+ * there too; so the lines meant to glow are pushed past it, and only while it is on.
+ */
+const OUTLINE_GLOW_HEAT = 2.5;
 const HOVER_TINT = new THREE.Color(1.6, 1.6, 1.6);
 const NEUTRAL_TINT = new THREE.Color(1, 1, 1);
 const NO_ROTATION = new THREE.Quaternion();
@@ -297,6 +368,11 @@ const GRID_FRAGMENT_SHADER = /* glsl */ `
   uniform float uMajorSpacing;
   uniform float uFadeNear;
   uniform float uFadeFar;
+  uniform vec3 uScanOrigin;
+  uniform float uScanRadius;
+  uniform float uScanWidth;
+  uniform float uScanStrength;
+  uniform vec3 uScanColor;
   varying vec3 vWorldPosition;
   layout(location = 0) out vec4 fragColor;
 
@@ -312,8 +388,16 @@ const GRID_FRAGMENT_SHADER = /* glsl */ `
     float major = gridMask(vWorldPosition.xz, uMajorSpacing);
     float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, distance(vWorldPosition.xz, uCamera.xz));
     float alpha = max(minor * 0.32, major * 0.7) * fade;
+    vec3 color = mix(uMinorColor, uMajorColor, major);
+    // The scan front, where it meets the floor: the grid lines it crosses flare, and a
+    // faint wash marks the ring itself so it still reads between the lines.
+    if (uScanStrength > 0.0) {
+      float ring = exp(-abs(distance(vWorldPosition.xz, uScanOrigin.xz) - uScanRadius) / uScanWidth) * uScanStrength;
+      alpha = max(alpha, ring * 0.1) + max(minor, major) * ring * 0.8;
+      color = mix(color, uScanColor, min(ring * 1.5, 1.0));
+    }
     if (alpha < 0.002) discard;
-    fragColor = vec4(mix(uMinorColor, uMajorColor, major), alpha);
+    fragColor = vec4(color, alpha);
   }
 `;
 
@@ -339,6 +423,18 @@ export class WorldScene {
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
   /** One glow canvas per scene instance, reused by every area's beacon. */
   private readonly glowTexture = createGlowTexture();
+  /** A label that is never shown, kept so its shader program is compiled ahead of need. */
+  private readonly labelPrimer = makeLabel("", "#000000");
+  /** Shares the selection's geometry and material; it owns neither. */
+  private readonly outlinePrimer: THREE.LineSegments;
+  /** Wires from each visited folder's plot to its district; outside every area's group. */
+  private readonly links = new LinkNetwork();
+  private readonly thumbnails: ThumbnailLoader;
+  /** The district whose roofs were last asked for, so each arrival asks exactly once. */
+  private thumbnailArea: DirectoryArea | null = null;
+  private readonly bloom: PhosphorBloom;
+  /** What the viewer asked for; the glow itself waits for a still moment to compile. */
+  private glowWanted = false;
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -361,6 +457,8 @@ export class WorldScene {
   private flight: CameraFlight | null = null;
   private intro: AreaIntro | null = null;
   private revealHeld = false;
+  /** New districts whose shaders are still compiling; the reveal waits for them. */
+  private warming = 0;
   private hovered: FsNode | null = null;
   private aimed: Placement | null = null;
   private selected: Placement | null = null;
@@ -401,6 +499,22 @@ export class WorldScene {
   /** Screen boxes already claimed by this pick, in NDC. Rebuilt every pick. */
   private readonly labelRects: LabelRect[] = [];
   private lastLabelSelect = 0;
+  /** Null is the type palette; anything else paints instances in the lens's colours. */
+  private colourLens: ColourLens | null = null;
+  private directorySize: DirectorySize = "own";
+  /**
+   * District groups replaced by a rebuild, freed only after the frame that first draws
+   * their replacements. Freeing a material releases its shader program, and if nothing
+   * else held it the replacement would compile it again, synchronously, mid-frame.
+   */
+  private readonly retired: THREE.Object3D[] = [];
+  /**
+   * Districts owed a rebuild that could not have it yet: one still compiling would have
+   * the warm-up polling materials the rebuild had freed, and one mid-reveal would lose
+   * the reveal. Each is rebuilt on the first frame it is free to be.
+   */
+  private readonly pendingRebuilds = new Set<string>();
+  private readonly scratchTint = new THREE.Color();
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly callbacks: SceneCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
@@ -420,12 +534,15 @@ export class WorldScene {
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Roofs are seen at a slant from almost every angle the camera flies at.
+    this.thumbnails = new ThumbnailLoader(callbacks.readFile, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
 
     this.scene.background = new THREE.Color(BACKDROP);
     this.scene.fog = new THREE.Fog(BACKDROP, 110, 520);
     this.camera = new THREE.PerspectiveCamera(52, 1, 0.5, 3000);
     this.camera.position.set(0, 16, 30);
     this.scene.add(this.camera);
+    this.bloom = new PhosphorBloom(this.renderer, this.scene, this.camera);
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -463,16 +580,28 @@ export class WorldScene {
     this.gridMaterial = environment.gridMaterial;
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
+    this.scene.add(this.links.group);
 
     this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
-    this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
+    this.selectionMaterial = new THREE.LineBasicMaterial({ color: SELECTION_COLOR, transparent: true, opacity: 0.95 });
     this.selectionBox = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
-    this.aimMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 });
+    this.aimMaterial = new THREE.LineBasicMaterial({ color: AIM_COLOR, transparent: true, opacity: 0.5 });
     this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
+    // Both outlines start hidden, so without this their program was first compiled by
+    // the first click that selected anything: a freeze on the very gesture meant to
+    // answer it. The aim outline's material differs only in colour and opacity, which
+    // are uniforms, so priming one primes both.
+    this.outlinePrimer = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
+
+    // Primers are drawn once per warm-up, so they must never cover a pixel or be culled.
+    for (const primer of this.primers()) {
+      primer.scale.setScalar(0);
+      primer.frustumCulled = false;
+    }
 
     const listener = { signal: this.lifecycle.signal };
     this.canvas.addEventListener("pointermove", this.onPointerMove, listener);
@@ -499,22 +628,34 @@ export class WorldScene {
   }
 
   setDirectory(directory: FsNode, nodes: FsNode[], direction: NavigationDirection): void {
-    if (direction === "initial") this.disposeWorld();
+    // A new filesystem replaces the world, but the old one is only freed once the new
+    // one has been compiled. Its materials are what keep the shader programs alive, and
+    // freeing them first threw away the very programs the replacement was about to ask
+    // for: choosing the demo from the welcome screen, which already shows the demo,
+    // recompiled everything and froze a phone for over a second.
+    const retired = direction === "initial" ? this.detachWorld() : [];
+    // Whatever was being read for the last district's roofs is no longer being looked at.
+    this.thumbnails.cancel();
+    this.thumbnailArea = null;
 
     let area = this.areas.get(directory.id);
     let isNew = false;
     if (!area) {
-      const layout = buildLayout(nodes);
+      const layout = buildLayout(nodes, { directorySize: this.directorySize });
       // A directory just surgically evicted by `invalidateArea` rebuilds exactly where
       // it stood, not wherever `findAreaCenter` would otherwise place a fresh arrival.
       const reclaimed = this.invalidatedCenter?.id === directory.id ? this.invalidatedCenter.center : null;
       this.invalidatedCenter = null;
       const center = reclaimed ?? (direction === "initial" ? new THREE.Vector3() : this.findAreaCenter(directory, layout.radius));
-      area = this.createArea(directory.id, center, layout);
+      const scan = direction === "initial" && layout.placements.length > 0 && !prefersReducedMotion();
+      area = this.createArea(directory.id, center, layout, nodes, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
+      this.connectArea(area, directory.parentId);
+      this.warmUp(area);
       isNew = true;
     }
+    retired.forEach((object) => this.disposeAreaObjects(object));
 
     this.setActiveArea(area);
     // Only reveal on first build; re-entering a known directory should not replay it.
@@ -543,9 +684,17 @@ export class WorldScene {
     this.disposeAreaObjects(area.group);
     this.worldGroup.remove(area.group);
     this.areas.delete(directoryId);
+    // Both ends go: the wire in, and the wires out from plots that are about to be
+    // replaced. The rebuild lays them again from the new layout.
+    this.links.dropArea(directoryId);
+    this.thumbnails.forgetArea(directoryId);
+    if (this.thumbnailArea === area) this.thumbnailArea = null;
     this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
 
-    if (this.intro?.area === area) this.intro = null;
+    if (this.intro?.area === area) {
+      this.intro = null;
+      this.gridMaterial.uniforms.uScanStrength.value = 0;
+    }
     if (this.pendingArea === area) this.pendingArea = null;
     if (this.currentArea === area) this.currentArea = null;
     if (this.hoverTarget && area.placements.includes(this.hoverTarget)) this.hoverTarget = null;
@@ -569,7 +718,178 @@ export class WorldScene {
     }
   }
 
-  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout): DirectoryArea {
+  /**
+   * Switches what a plot's height means and lays every district out again to match. The
+   * same listing and the same totals always produce the same city, so switching back
+   * returns exactly the district that was there before.
+   */
+  setDirectorySize(size: DirectorySize): void {
+    if (size === this.directorySize) return;
+    this.directorySize = size;
+    [...this.areas.values()].forEach((area) => this.rebuildArea(area));
+  }
+
+  /** Lays one district out again in place, for when something its layout reads has changed. */
+  refreshArea(directoryId: string): void {
+    const area = this.areas.get(directoryId);
+    if (area) this.rebuildArea(area);
+  }
+
+  /**
+   * Repaints every instance for a colour lens, or for the type palette when `lens` is null.
+   * Nothing is rebuilt: positions, meshes and materials all stay, and only the per-instance
+   * colour and each material's glow change, so no new shader program is ever asked for.
+   * Call it again with a fresh lens when the data behind the current one changes.
+   */
+  setColourLens(lens: ColourLens | null): void {
+    this.colourLens = lens;
+    this.areas.forEach((area) => {
+      area.materials.forEach((material) => {
+        const category = material.userData.lensCategory as FileCategory | undefined;
+        if (category && material instanceof THREE.MeshLambertMaterial) material.emissive.setHex(this.emissiveFor(category));
+      });
+      this.paint(area.placements);
+    });
+    this.forgetLabels();
+  }
+
+  /**
+   * Replaces a district with a fresh layout of the same listing, standing where it stood.
+   * The swap happens within one frame — the replacement uses the programs the district
+   * already had, so it needs no warm-up — and whatever was hovered, aimed at or selected
+   * in it is carried across by node, so a rebuild never reads as a lost selection.
+   */
+  private rebuildArea(area: DirectoryArea): void {
+    if (!area.ready || this.intro?.area === area) {
+      this.pendingRebuilds.add(area.id);
+      return;
+    }
+    this.pendingRebuilds.delete(area.id);
+    const layout = buildLayout(area.nodes, { directorySize: this.directorySize });
+    const next = this.createArea(area.id, area.center, layout, area.nodes);
+    next.activation = area.activation;
+    next.activationTarget = area.activationTarget;
+    next.materials.forEach((material) => applyAreaLook(material, next.activation));
+
+    this.areas.set(area.id, next);
+    this.worldGroup.remove(area.group);
+    this.worldGroup.add(next.group);
+    this.retired.push(area.group);
+    area.pickMeshes.forEach((_placements, mesh) => this.pickMeshes.delete(mesh));
+    if (this.currentArea === area) {
+      this.currentArea = next;
+      next.pickMeshes.forEach((placements, mesh) => this.pickMeshes.set(mesh, placements));
+      this.focusLightOn(next);
+    }
+    if (this.pendingArea === area) this.pendingArea = null;
+
+    // A new layout moves plots and resizes the floor, so every wire into or out of this
+    // district is laid again against it, already in place since both ends were standing.
+    // Its pictures belonged to towers that are gone; the new ones fetch their own.
+    const parent = [...this.areas.values()].find((candidate) =>
+      candidate.placements.some((placement) => placement.node.id === area.id));
+    this.links.dropArea(area.id);
+    this.connectArea(next, parent?.id ?? null, true);
+    this.thumbnails.forgetArea(area.id);
+    if (this.thumbnailArea === area) {
+      this.thumbnails.cancel();
+      this.thumbnailArea = null;
+    }
+
+    const carry =(placement: Placement | null): Placement | null => {
+      if (!placement || !area.placements.includes(placement)) return placement;
+      return next.placements.find((candidate) => candidate.node.id === placement.node.id) ?? null;
+    };
+    this.hoverTarget = carry(this.hoverTarget);
+    if (this.hoverShown && area.placements.includes(this.hoverShown)) {
+      this.hoverShown = carry(this.hoverShown);
+      if (this.hoverShown) this.writeHover(this.hoverShown, this.hoverStrength);
+    }
+    this.aimed = carry(this.aimed);
+    if (this.selected && area.placements.includes(this.selected)) {
+      this.selected = carry(this.selected);
+      if (this.selected) {
+        this.selectionBox.position.copy(this.selected.outlinePosition);
+        this.selectionBox.scale.copy(this.selected.outlineScale).multiplyScalar(1.06);
+      } else {
+        this.selectionBox.visible = false;
+        this.callbacks.onSelect(null);
+      }
+    }
+  }
+
+  private flushRebuilds(): void {
+    for (const id of [...this.pendingRebuilds]) {
+      const area = this.areas.get(id);
+      if (!area) this.pendingRebuilds.delete(id);
+      else if (area.ready && this.intro?.area !== area) this.rebuildArea(area);
+    }
+  }
+
+  /** A material's glow: its type colour under the type palette, a quiet neutral under a lens. */
+  private emissiveFor(category: FileCategory): number {
+    if (category === "directory") return PLOT_COLOR;
+    return this.colourLens ? LENS_EMISSIVE : palette[category];
+  }
+
+  /**
+   * The colour an object is drawn in before hover brightens it. Materials are white and
+   * every instance carries its own colour, so the type palette and any lens take the same
+   * path and hover can multiply over either one.
+   */
+  private baseColor(placement: Placement, target: THREE.Color): THREE.Color {
+    const lensed = this.colourLens?.colorFor(placement.node) ?? null;
+    if (placement.node.kind === "directory") {
+      // A plot stays low-key land its markers stand on; a lens only shades it.
+      return lensed === null ? target.setHex(PLOT_COLOR) : target.setHex(lensed).multiplyScalar(PLOT_LENS_SHADE);
+    }
+    return target.setHex(lensed ?? palette[categoryOf(placement.node)]);
+  }
+
+  private markerColor(placement: Placement, decor: Decor, target: THREE.Color): THREE.Color {
+    const lensed = this.colourLens?.markerColorFor(placement.node, decor.index) ?? null;
+    return target.setHex(lensed ?? palette[decor.category]);
+  }
+
+  /** Writes every instance colour for these placements and their markers. */
+  private paint(placements: Placement[]): void {
+    const touched = new Set<THREE.InstancedMesh>();
+    for (const placement of placements) {
+      if (placement.mesh && placement.instanceIndex !== undefined) {
+        const strength = placement === this.hoverShown ? this.hoverStrength : 0;
+        placement.mesh.setColorAt(placement.instanceIndex, this.tintedColor(placement, strength));
+        touched.add(placement.mesh);
+      }
+      for (const decor of placement.decor) {
+        if (!decor.mesh || decor.instanceIndex === undefined) continue;
+        decor.mesh.setColorAt(decor.instanceIndex, this.markerColor(placement, decor, this.scratchColor));
+        touched.add(decor.mesh);
+      }
+    }
+    touched.forEach((mesh) => {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    });
+  }
+
+  /** Base colour times the hover tint at `strength`, in the shared scratch colour. */
+  private tintedColor(placement: Placement, strength: number): THREE.Color {
+    return this.baseColor(placement, this.scratchColor).multiply(this.scratchTint.copy(NEUTRAL_TINT).lerp(HOVER_TINT, strength));
+  }
+
+  /** Drops every name plate so the next pick draws them again in the current colours. */
+  private forgetLabels(): void {
+    this.areas.forEach((area) => {
+      area.labels.forEach((sprite) => {
+        (sprite.userData.placement as Placement).label = undefined;
+        area.group.remove(sprite);
+        sprite.material.map?.dispose();
+        sprite.material.dispose();
+      });
+      area.labels.length = 0;
+    });
+  }
+
+  private createArea(id: string, center: THREE.Vector3, layout: AreaLayout, nodes: FsNode[], scanned = false): DirectoryArea {
     const group = new THREE.Group();
     group.userData.directoryArea = id;
     const placements = layout.placements;
@@ -614,12 +934,13 @@ export class WorldScene {
       // A directory's body is the plot itself, kept neutral: the markers standing on it
       // are what carry colour, and a crimson slab under them would drown them out.
       const isDirectory = category === "directory";
-      const bodyColor = isDirectory ? PLOT_COLOR : palette[category];
+      // White, because the colour is each instance's: see `baseColor`.
       const buildingMaterial = new THREE.MeshLambertMaterial({
-        color: bodyColor,
-        emissive: bodyColor,
+        color: 0xffffff,
+        emissive: this.emissiveFor(category),
         emissiveIntensity: isDirectory ? 0.2 : 0.05,
       });
+      buildingMaterial.userData.lensCategory = category;
       rememberActiveLook(buildingMaterial);
       materials.push(buildingMaterial);
       const buildingMesh = new THREE.InstancedMesh(this.unitBox, buildingMaterial, categoryPlacements.length);
@@ -630,13 +951,12 @@ export class WorldScene {
         buildingMesh.setMatrixAt(index, matrix);
       });
       buildingMesh.instanceMatrix.needsUpdate = true;
-      // Establish instanceColor up front so the first hover does not recompile the shader.
+      // Colours are written by `paint` below, which also establishes instanceColor before
+      // the warm-up compiles this mesh: added any later, it would be a new program.
       categoryPlacements.forEach((placement, index) => {
-        buildingMesh.setColorAt(index, NEUTRAL_TINT);
         placement.mesh = buildingMesh;
         placement.instanceIndex = index;
       });
-      if (buildingMesh.instanceColor) buildingMesh.instanceColor.needsUpdate = true;
       buildingMesh.computeBoundingBox();
       buildingMesh.computeBoundingSphere();
       pickMeshes.set(buildingMesh, categoryPlacements);
@@ -655,10 +975,11 @@ export class WorldScene {
     }));
     for (const [category, markers] of markersByCategory) {
       const markerMaterial = new THREE.MeshLambertMaterial({
-        color: palette[category],
-        emissive: palette[category],
+        color: 0xffffff,
+        emissive: this.emissiveFor(category),
         emissiveIntensity: 0.14,
       });
+      markerMaterial.userData.lensCategory = category;
       rememberActiveLook(markerMaterial);
       materials.push(markerMaterial);
       const markerMesh = new THREE.InstancedMesh(this.unitBox, markerMaterial, markers.length);
@@ -675,6 +996,8 @@ export class WorldScene {
       decorMeshes.push(markerMesh);
       group.add(markerMesh);
     }
+
+    this.paint(placements);
 
     // Labels are not built here. `selectLabels` names whatever is nearest on screen and
     // creates the sprite at that moment, so this list fills in as the camera explores.
@@ -696,12 +1019,64 @@ export class WorldScene {
     materials.push(beacon.material);
     group.add(beacon);
 
+    const scan = this.prepareScan(center, layout, group, materials, [rim, ground], scanned);
+
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
-    return {
-      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
-      placements, decorMeshes, pickMeshes, materials, labels,
-      activation: 1, activationTarget: 1,
+    const footprint: LinkFootprint = {
+      x: center.x,
+      z: center.z,
+      halfWidth: layout.groundWidth / 2 + RIM_OVERHANG,
+      halfDepth: layout.groundDepth / 2 + RIM_OVERHANG,
     };
+    return {
+      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight, footprint,
+      nodes, placements, decorMeshes, pickMeshes, materials, labels,
+      ready: true, activation: 1, activationTarget: 1, scan,
+    };
+  }
+
+  /**
+   * Hooks every material of a freshly built district into one set of scan uniforms and,
+   * when it is to be scanned, lays the wire cage over it. Has to happen before the
+   * district's first frame: the hooks are compiled into the shaders, and a district drawn
+   * once without them would flash whole before the scan began.
+   *
+   * Districts that will only rise get the hooks too, switched off. Every district then
+   * draws with the same few shader programs, so the first double-click into a folder
+   * reuses what the arrival already compiled; with two variants, that click paid for a
+   * second round of compilation, which on a phone is a freeze of the better part of a
+   * second.
+   */
+  private prepareScan(
+    center: THREE.Vector3,
+    layout: AreaLayout,
+    group: THREE.Group,
+    materials: THREE.Material[],
+    slabs: THREE.Mesh[],
+    scanned: boolean,
+  ): AreaScan {
+    const halfWidth = layout.groundWidth / 2 + RIM_OVERHANG;
+    const halfDepth = layout.groundDepth / 2 + RIM_OVERHANG;
+    const origin = new THREE.Vector3(center.x, GROUND_TOP, center.z);
+    const reach = Math.hypot(halfWidth, halfDepth, layout.peakHeight);
+    const uniforms = createScanUniforms(origin, reach);
+    uniforms.uScanEnabled.value = scanned ? 1 : 0;
+    materials.forEach((material) => installScan(material, uniforms));
+
+    const depthMaterial = createScanDepthMaterial(uniforms);
+    group.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.castShadow) object.customDepthMaterial = depthMaterial;
+    });
+    if (!scanned) return { uniforms, cage: null, reach };
+
+    const boxes: CageBox[] = slabs.map((slab) => ({ position: slab.position, scale: slab.scale }));
+    layout.placements.forEach((placement) => {
+      boxes.push({ position: placement.position, scale: placement.scale });
+      placement.decor.forEach((decor) => boxes.push({ position: decor.position, scale: decor.scale }));
+    });
+    const cage = createScanCage(boxes, uniforms);
+    group.add(cage);
+    return { uniforms, cage, reach };
   }
 
   /**
@@ -734,6 +1109,26 @@ export class WorldScene {
       }
     }
     return candidate.clone();
+  }
+
+  /**
+   * Wires a newly built district into the tree in both directions: in from its folder's
+   * plot in the parent, when the parent is standing, and out from each of its own plots to
+   * any child already standing. The second happens whenever a district is built after one
+   * of its children, which is how going up from a deep link or rebuilding an invalidated
+   * parent in place goes. Those wires join two districts that were both already there, so
+   * they arrive laid rather than running out as a new arrival's does.
+   */
+  private connectArea(area: DirectoryArea, parentId: string | null, grown = false): void {
+    const parent = parentId ? this.areas.get(parentId) : undefined;
+    const entrance = parent?.placements.find((placement) => placement.node.id === area.id);
+    if (parent && entrance) this.links.connect(parent.id, area.id, plotFootprint(entrance), area.footprint, GROUND_TOP, grown);
+    for (const placement of area.placements) {
+      if (placement.node.kind !== "directory") continue;
+      const child = this.areas.get(placement.node.id);
+      if (!child || child === area) continue;
+      this.links.connect(area.id, child.id, plotFootprint(placement), child.footprint, GROUND_TOP, true);
+    }
   }
 
   private isCenterFree(center: THREE.Vector3, radius: number): boolean {
@@ -868,8 +1263,7 @@ export class WorldScene {
   }
 
   private buildLabel(placement: Placement, area: DirectoryArea): THREE.Sprite {
-    const color = palette[categoryOf(placement.node)];
-    const sprite = makeLabel(placement.node.name, `#${color.toString(16).padStart(6, "0")}`);
+    const sprite = makeLabel(placement.node.name, `#${this.labelColor(placement).getHexString()}`);
     sprite.userData.placement = placement;
     this.sizeLabel(sprite);
     sprite.userData.introDelay = placement.introDelay;
@@ -882,6 +1276,21 @@ export class WorldScene {
     area.labels.push(sprite);
     area.group.add(sprite);
     return sprite;
+  }
+
+  /**
+   * A plate is inked in its object's colour, so a lens re-inks the names with it. Lens
+   * colours are chosen for towers, though, and the dimmest of them — ignored files — would
+   * print a name nobody could read, so a plate is lifted to a floor of lightness.
+   */
+  private labelColor(placement: Placement): THREE.Color {
+    const color = new THREE.Color(palette[categoryOf(placement.node)]);
+    const lensed = this.colourLens?.colorFor(placement.node) ?? null;
+    if (lensed === null) return color;
+    color.setHex(lensed);
+    const hsl = color.getHSL({ h: 0, s: 0, l: 0 });
+    if (hsl.l < LABEL_MIN_LIGHTNESS) color.setHSL(hsl.h, hsl.s, LABEL_MIN_LIGHTNESS);
+    return color;
   }
 
   /** Drops the least recently shown labels once the cache outgrows its budget. */
@@ -907,6 +1316,26 @@ export class WorldScene {
       entry.sprite.material.dispose();
       total -= 1;
     }
+  }
+
+  /** How lit a district is, for the things drawn between or on top of districts. */
+  private activationOf = (areaId: string): number => this.areas.get(areaId)?.activation ?? 0;
+
+  /**
+   * Asks for the active district's pictures once its reveal is over and the camera has
+   * landed, not while either plays. Decoding happens off the thread, but reading does not
+   * always: a source that has to produce its bytes (the demo draws and deflates its PNG in
+   * the page) spends real time on the main thread, and a hitch is far less noticeable in
+   * a still view than in a moving one. A roof dressed before the scan has found its tower
+   * would also float a picture over empty ground.
+   */
+  private updateThumbnails(): void {
+    const area = this.currentArea;
+    if (area && area !== this.thumbnailArea && !this.intro && !this.flight && !this.revealPaused) {
+      this.thumbnailArea = area;
+      this.thumbnails.request(area.id, area.group, area.placements, this.camera.position);
+    }
+    this.thumbnails.update(performance.now(), this.activationOf);
   }
 
   /** Eases every area towards its activation target so directories cross-fade. */
@@ -1030,7 +1459,7 @@ export class WorldScene {
     toPosition: THREE.Vector3,
     options: { duration?: number; ease?: (progress: number) => number; interruptible?: boolean } = {},
   ): void {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (prefersReducedMotion()) {
       this.flight = null;
       this.camera.position.copy(toPosition);
       this.controls.target.copy(toTarget);
@@ -1087,16 +1516,75 @@ export class WorldScene {
   releaseReveal(): void {
     if (!this.revealHeld) return;
     this.revealHeld = false;
+    this.restartReveal();
+  }
+
+  /** Paused by the welcome screen, or by shaders still compiling off the main thread. */
+  private get revealPaused(): boolean {
+    return this.revealHeld || this.warming > 0;
+  }
+
+  private restartReveal(): void {
+    if (this.revealPaused) return;
     const now = performance.now();
     if (this.intro) this.intro.startedAt = now;
     if (this.flight) this.flight.startedAt = now;
   }
 
+  /**
+   * Compiles a new district's shaders before it is first drawn, and keeps the district
+   * hidden and its reveal parked until they are ready. Drawing it straight away makes
+   * WebGL compile and link every program it needs synchronously inside that frame,
+   * which on a phone froze the page for over a second just as the arrival began.
+   * `compileAsync` issues the work up front and, where the driver offers parallel
+   * compilation, waits for it without blocking; a district whose programs are already
+   * cached comes back within a frame or two.
+   */
+  private warmUp(area: DirectoryArea): void {
+    this.warming += 1;
+    area.ready = false;
+    // Without parallel compilation the driver still checks each program on its first
+    // draw, and that draw stalls. So the district is shown one frame before the reveal
+    // restarts: the stall lands on a frame where the reveal is still parked at nothing,
+    // and the animation begins after it rather than jumping ahead by its length.
+    //
+    // The primers stay in the group for that frame and are drawn in it, collapsed to
+    // nothing. Compiling a program is not the whole cost: where the driver defers the real
+    // work until a program is first used, the stall only moves to whichever frame first
+    // draws with it, and for a primer that was only ever compiled that frame was the one
+    // where the first name or wire appeared. Drawn here, their stall joins the district's.
+    const primers = this.primers();
+    const done = () => {
+      if (this.lifecycle.signal.aborted) return;
+      area.ready = true;
+      area.group.visible = true;
+      requestAnimationFrame(() => {
+        primers.forEach((primer) => area.group.remove(primer));
+        this.warming -= 1;
+        this.restartReveal();
+      });
+    };
+    // compileAsync only reaches visible objects, so it has to run before the hide. The
+    // label primer rides along because labels are built lazily, well into the reveal,
+    // and the first one compiled its program mid-scan: a visible hitch just as the
+    // names began to appear. Its program outlives the visit because the primer's
+    // material does. The other primers are there for the same reason: each stands in
+    // for something built after the reveal starts.
+    area.group.add(...primers);
+    this.renderer.compileAsync(area.group, this.camera, this.scene).then(done, done);
+    area.group.visible = false;
+  }
+
+  /** Stand-ins for everything drawn with a program no district's own objects compile. */
+  private primers(): THREE.Object3D[] {
+    return [this.labelPrimer, this.outlinePrimer, this.links.primer, this.thumbnails.primer];
+  }
+
   private startIntro(area: DirectoryArea): void {
     if (this.intro) this.finishIntro();
     if (!area.placements.length) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    this.intro = { area, startedAt: performance.now() };
+    if (prefersReducedMotion()) return;
+    this.intro = { area, startedAt: performance.now(), mode: area.scan.cage ? "scan" : "rise" };
     area.labels.forEach((label) => (label.material.userData.introFade = 0));
     this.applyIntro(0);
   }
@@ -1105,10 +1593,11 @@ export class WorldScene {
   private applyIntro(elapsed: number): boolean {
     const intro = this.intro;
     if (!intro) return true;
-    const matrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    const rotation = new THREE.Quaternion();
+    if (intro.mode === "scan") return this.applyScan(intro.area, intro.area.scan, elapsed);
+    const matrix = this.scratchMatrix;
+    const position = this.scratchVector;
+    const scale = INTRO_SCALE;
+    const rotation = NO_ROTATION;
     let settled = true;
 
     intro.area.placements.forEach((placement) => {
@@ -1151,10 +1640,69 @@ export class WorldScene {
     return settled;
   }
 
+  /**
+   * The scan's frame: the towers already stand at full height and only the front moves.
+   * A label waits for the solid front to reach the object it names, so names never
+   * float over lots the survey has not found yet.
+   */
+  private applyScan(area: DirectoryArea, scan: AreaScan, elapsed: number): boolean {
+    const pose = scanPose(elapsed, scan.reach);
+    const { uniforms } = scan;
+    uniforms.uScanRadius.value = pose.radius;
+    uniforms.uWireOpacity.value = pose.wire;
+
+    const grid = this.gridMaterial.uniforms;
+    grid.uScanOrigin.value.copy(uniforms.uScanOrigin.value);
+    grid.uScanRadius.value = pose.radius;
+    grid.uScanWidth.value = uniforms.uScanRim.value;
+    grid.uScanStrength.value = pose.wire;
+
+    // Each label keeps its own clock from the moment the front reaches it. Fading over a
+    // span of radius instead made the fade as fast as the front, and the front leaves
+    // the centre at a sprint: the nearest names snapped on in a frame or two.
+    const origin = uniforms.uScanOrigin.value;
+    let labelsSettled = true;
+    area.labels.forEach((label) => {
+      const placement = label.userData.placement as Placement;
+      const arrival = solidReachesAt(placement.position.distanceTo(origin), scan.reach);
+      const reached = label.userData.scanReachedAt as number | undefined;
+      if (pose.radius < arrival || (reached !== undefined && reached > elapsed)) {
+        label.userData.scanReachedAt = undefined;
+        label.material.userData.introFade = 0;
+        labelsSettled = false;
+        return;
+      }
+      const since = elapsed - (reached ?? elapsed);
+      if (reached === undefined) label.userData.scanReachedAt = elapsed;
+      const progress = THREE.MathUtils.clamp(since / SCAN_LABEL_FADE, 0, 1);
+      if (progress < 1) labelsSettled = false;
+      label.material.userData.introFade = THREE.MathUtils.smoothstep(progress, 0, 1);
+    });
+    return pose.done && labelsSettled;
+  }
+
+  /** Switches the scan off for good: the shader hooks stay compiled but stand down. */
+  private endScan(scan: AreaScan): void {
+    scan.uniforms.uScanEnabled.value = 0;
+    scan.uniforms.uWireOpacity.value = 0;
+    this.gridMaterial.uniforms.uScanStrength.value = 0;
+    if (!scan.cage) return;
+    scan.cage.removeFromParent();
+    scan.cage.geometry.dispose();
+    (scan.cage.material as THREE.Material).dispose();
+    scan.cage = null;
+  }
+
   /** Snaps every object to its final pose and ends the reveal. */
   private finishIntro(): void {
     const intro = this.intro;
     if (!intro) return;
+    if (intro.mode === "scan") {
+      this.endScan(intro.area.scan);
+      intro.area.labels.forEach((label) => (label.material.userData.introFade = 1));
+      this.intro = null;
+      return;
+    }
     const matrix = new THREE.Matrix4();
     const rotation = new THREE.Quaternion();
     intro.area.placements.forEach((placement) => {
@@ -1186,6 +1734,28 @@ export class WorldScene {
   /** Returns the camera to the active directory after wandering off. */
   refocus(): void {
     if (this.currentArea) this.flyToArea(this.currentArea, "travel");
+  }
+
+  /** Switches the phosphor glow on or off; see `updateGlow` for when it actually starts. */
+  setGlow(on: boolean): void {
+    this.glowWanted = on;
+  }
+
+  /**
+   * The glow's passes are compiled the first time it is wanted, and never inside a reveal
+   * or a flight: that is the same freeze the warm-up exists to keep out of the arrival.
+   * So a glow remembered from a previous visit comes up once the city has landed, and one
+   * switched on mid-flight comes up when the flight does. Nor before there is a city at
+   * all: the page's first frames have nothing to reveal yet, and compiling then is
+   * exactly the load-time freeze this is keeping out.
+   */
+  private updateGlow(delta: number): void {
+    const still = this.currentArea !== null && !this.intro && !this.flight && !this.revealPaused;
+    if (this.glowWanted && still && !this.bloom.isReady && !this.bloom.isPreparing) void this.bloom.prepare();
+    this.bloom.update(delta, this.glowWanted);
+    const heat = 1 + this.bloom.level * OUTLINE_GLOW_HEAT;
+    this.selectionMaterial.color.set(SELECTION_COLOR).multiplyScalar(heat);
+    this.aimMaterial.color.set(AIM_COLOR).multiplyScalar(heat);
   }
 
   getAimedNode(): FsNode | null {
@@ -1228,6 +1798,11 @@ export class WorldScene {
         uMajorSpacing: { value: 27 },
         uFadeNear: { value: 70 },
         uFadeFar: { value: 470 },
+        uScanOrigin: { value: new THREE.Vector3() },
+        uScanRadius: { value: 0 },
+        uScanWidth: { value: 1 },
+        uScanStrength: { value: 0 },
+        uScanColor: { value: new THREE.Color(SCAN_COLOR) },
       },
       vertexShader: GRID_VERTEX_SHADER,
       fragmentShader: GRID_FRAGMENT_SHADER,
@@ -1275,19 +1850,30 @@ export class WorldScene {
   }
 
   private disposeWorld(): void {
+    this.detachWorld().forEach((object) => this.disposeAreaObjects(object));
+  }
+
+  /** Forgets every area and hands back their objects, still alive, for the caller to free. */
+  private detachWorld(): THREE.Object3D[] {
     this.pickMeshes.clear();
     this.areas.clear();
+    this.pendingRebuilds.clear();
+    // Wires are not part of any area's group, so they are not handed back to be freed
+    // later; nothing is waiting on their program, which the primer keeps alive.
+    this.links.clear();
+    // The pictures themselves go with their groups; only the bookkeeping is dropped here.
+    this.thumbnails.forgetAll();
+    this.thumbnailArea = null;
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
+    this.gridMaterial.uniforms.uScanStrength.value = 0;
     this.hoverTarget = null;
     this.hoverShown = null;
     this.hoverStrength = 0;
-    while (this.worldGroup.children.length) {
-      const object = this.worldGroup.children.pop();
-      if (!object) continue;
-      this.disposeAreaObjects(object);
-    }
+    const detached = [...this.worldGroup.children];
+    this.worldGroup.clear();
+    return detached;
   }
 
   /**
@@ -1298,9 +1884,16 @@ export class WorldScene {
    * a single area's group without touching any other.
    */
   private disposeAreaObjects(object: THREE.Object3D): void {
+    // A district torn down mid warm-up is still carrying the primers, which belong to
+    // the scene and hold programs every later district relies on.
+    for (const primer of this.primers()) {
+      if (primer.parent === object) object.remove(primer);
+    }
     object.traverse((descendant) => {
       if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
       if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
+      // Shared by every caster in a scanned district; disposing it twice is harmless.
+      if (descendant instanceof THREE.Mesh) descendant.customDepthMaterial?.dispose();
       const materials = Array.isArray(descendant.material) ? descendant.material : [descendant.material];
       materials.forEach((material) => {
         const map = (material as THREE.Material & { map?: THREE.Texture | null }).map;
@@ -1323,9 +1916,23 @@ export class WorldScene {
     this.pointer.set(x, y);
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects([...this.pickMeshes.keys()], false);
-    const hit = hits[0];
-    if (!hit || hit.instanceId === undefined || !(hit.object instanceof THREE.InstancedMesh)) return null;
-    return this.pickMeshes.get(hit.object)?.[hit.instanceId] ?? null;
+    for (const hit of hits) {
+      if (hit.instanceId === undefined || !(hit.object instanceof THREE.InstancedMesh)) continue;
+      const placement = this.pickMeshes.get(hit.object)?.[hit.instanceId];
+      // The ray goes where the eye does: through a district still hidden while its
+      // shaders compile, and through towers the scan has not revealed yet.
+      if (!placement || !hit.object.parent?.visible || this.awaitingScan(placement)) continue;
+      return placement;
+    }
+    return null;
+  }
+
+  private awaitingScan(placement: Placement): boolean {
+    const intro = this.intro;
+    if (intro?.mode !== "scan" || !intro.area.placements.includes(placement)) return false;
+    const { uniforms, reach } = intro.area.scan;
+    const distance = placement.position.distanceTo(uniforms.uScanOrigin.value);
+    return uniforms.uScanRadius.value < solidReachesAt(distance, reach);
   }
 
   private updateAim(): void {
@@ -1378,12 +1985,13 @@ export class WorldScene {
     const mesh = placement.mesh;
     if (!mesh || placement.instanceIndex === undefined) return;
     const lift = HOVER_LIFT * strength;
-    mesh.setColorAt(placement.instanceIndex, this.scratchColor.copy(NEUTRAL_TINT).lerp(HOVER_TINT, strength));
+    mesh.setColorAt(placement.instanceIndex, this.tintedColor(placement, strength));
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.scratchVector.copy(placement.position).setY(placement.position.y + lift);
     this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, placement.scale);
     mesh.setMatrixAt(placement.instanceIndex, this.scratchMatrix);
     mesh.instanceMatrix.needsUpdate = true;
+    this.thumbnails.lift(placement, lift);
 
     // A plot lifting out from under its own markers would tear the preview apart.
     placement.decor.forEach((decor) => {
@@ -1582,16 +2190,17 @@ export class WorldScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    this.bloom.setSize(width, height);
   };
 
   private updateMovement(delta: number): void {
-    const desired = new THREE.Vector3();
+    const desired = MOVE_DESIRED.set(0, 0, 0);
     if (this.movement.size) {
-      const forward = new THREE.Vector3();
+      const forward = MOVE_FORWARD;
       this.camera.getWorldDirection(forward);
       forward.y = 0;
       forward.normalize();
-      const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
+      const right = MOVE_RIGHT.crossVectors(forward, this.camera.up).normalize();
       // Alt swaps the two clusters outright, so whichever one is not turning is here.
       const held = (fly: string, arrow: string): boolean => this.movement.has(this.swapped ? arrow : fly);
       if (held("KeyW", "ArrowUp")) desired.add(forward);
@@ -1610,7 +2219,7 @@ export class WorldScene {
       this.velocity.set(0, 0, 0);
       return;
     }
-    const step = this.velocity.clone().multiplyScalar(delta);
+    const step = MOVE_STEP.copy(this.velocity).multiplyScalar(delta);
     this.camera.position.add(step);
     this.controls.target.add(step);
   }
@@ -1656,10 +2265,13 @@ export class WorldScene {
     if (!this.flight) {
       this.updateTurn(delta);
       this.updateMovement(delta);
-    } else if (!this.revealHeld) this.advanceFlight();
+    } else if (!this.revealPaused) this.advanceFlight();
 
     this.updateActivation(delta);
-    if (this.intro && !this.revealHeld && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    this.links.update(delta, this.revealPaused, this.activationOf);
+    this.updateThumbnails();
+    if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
+    if (this.pendingRebuilds.size) this.flushRebuilds();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
     // Coalesces every pointermove since the last frame into one raycast, the way the
@@ -1692,7 +2304,15 @@ export class WorldScene {
       this.checkAreaEntry();
       this.updateAim();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.updateGlow(delta);
+    if (this.bloom.drawing) this.bloom.render(delta);
+    else this.renderer.render(this.scene, this.camera);
+    // Only now, with their replacements drawn and holding the programs, can the districts
+    // a rebuild retired be freed without taking a shader down with them.
+    if (this.retired.length) {
+      this.retired.forEach((object) => this.disposeAreaObjects(object));
+      this.retired.length = 0;
+    }
     this.frame = requestAnimationFrame(this.animate);
   };
 
@@ -1702,6 +2322,8 @@ export class WorldScene {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.disposeWorld();
+    this.retired.forEach((object) => this.disposeAreaObjects(object));
+    this.retired.length = 0;
     // Environment and outline resources live outside worldGroup, so disposeWorld never
     // reaches them; everything per-scene-instance is freed here, shared resources last.
     this.grid.geometry.dispose();
@@ -1717,9 +2339,40 @@ export class WorldScene {
     this.aimMaterial.dispose();
     this.unitBox.dispose();
     this.glowTexture.dispose();
+    this.labelPrimer.material.map?.dispose();
+    this.labelPrimer.material.dispose();
+    this.links.dispose();
+    this.thumbnails.dispose();
+    this.bloom.dispose();
     this.renderer.dispose();
   }
 }
+
+/** A folder's plot as a wire sees it: the slab's own footprint, markers aside. */
+function plotFootprint(placement: Placement): LinkFootprint {
+  return {
+    x: placement.position.x,
+    z: placement.position.z,
+    halfWidth: placement.scale.x / 2,
+    halfDepth: placement.scale.z / 2,
+  };
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * Scratch objects for the paths that run every frame: the rise, and flying on the keys.
+ * Each is written in full before it is read, and nothing holds on to one across frames,
+ * so sharing them spares the collector a steady trickle of garbage that a phone feels as
+ * the occasional dropped frame.
+ */
+const INTRO_SCALE = new THREE.Vector3();
+const MOVE_DESIRED = new THREE.Vector3();
+const MOVE_FORWARD = new THREE.Vector3();
+const MOVE_RIGHT = new THREE.Vector3();
+const MOVE_STEP = new THREE.Vector3();
 
 const TURN_OFFSET = new THREE.Vector3();
 const TURN_SPHERICAL = new THREE.Spherical();

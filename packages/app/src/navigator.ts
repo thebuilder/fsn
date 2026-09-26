@@ -1,23 +1,43 @@
 import {
   categoryOf,
+  combineUsage,
+  createGitStatusIndex,
   formatBytes,
   formatDate,
+  formatUsage,
+  formatUsageBytes,
+  indexChildren,
+  locationOf,
   pathFor,
-  searchFilesystem,
+  searchIndex,
   sortNodes,
-  unreadDirectoriesUnder,
+  usageOfLoadedTree,
+  type DirectoryUsage,
   type FilesystemRoot,
   type FsNode,
-  type SearchMatch,
-  type SearchOutcome,
+  type GitStatusIndex,
+  type IndexedObject,
 } from "@fsn/core";
+import { mountGlowToggle } from "./bloom";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
+import {
+  createAgeLens,
+  createGitLens,
+  legendFor,
+  lensStorage,
+  readLensChoice,
+  writeLensChoice,
+  type ColourMode,
+  type LensChoice,
+} from "./lens";
 import { dismissOnOutsidePress } from "./light-dismiss";
 import type { NavigatorPlatform, RecalledSource } from "./platform";
-import { readRoute, routeFor, sameRoute } from "./route";
+import { readRoute, routeFor, sameObject, sameRoute, type Route, type RouteObject } from "./route";
 import { WorldScene, type NavigationDirection } from "./scene";
+import { TreeIndex } from "./tree-index";
 import { FileViewer } from "./viewer";
+import { el } from "./viewers/dom";
 
 export type NavigatorHandle = {
   /** Returns false when an active editor refuses to discard its unsaved changes. */
@@ -59,24 +79,31 @@ const searchDialog = getElement<HTMLDialogElement>("search-dialog");
 const searchInput = getElement<HTMLInputElement>("search-input");
 const searchResults = getElement<HTMLUListElement>("search-results");
 const searchCount = getElement<HTMLElement>("search-count");
-const searchDeepen = getElement<HTMLButtonElement>("search-deepen");
-const scopeSwitch = getElement<HTMLElement>("scope-switch");
-const scopeCurrentButton = getElement<HTMLButtonElement>("scope-current");
-const scopeAllButton = getElement<HTMLButtonElement>("scope-all");
+const searchProgress = getElement<HTMLElement>("search-progress");
 const helpDialog = getElement<HTMLDialogElement>("help-dialog");
 const helpButton = getElement<HTMLButtonElement>("help-button");
 const welcomeDialog = getElement<HTMLDialogElement>("welcome-dialog");
 const welcomeDemo = getElement<HTMLButtonElement>("welcome-demo");
 const folderButtonLabel = getElement<HTMLElement>("folder-button-label");
 const brandHome = getElement<HTMLAnchorElement>("brand-home");
+const lensButton = getElement<HTMLButtonElement>("lens-button");
+const lensPanel = getElement<HTMLElement>("lens-panel");
+const lensProgress = getElement<HTMLElement>("lens-progress");
+const legendTitle = getElement<HTMLElement>("legend-title");
+const legendList = getElement<HTMLUListElement>("legend-list");
+const sizeButtons = [...lensPanel.querySelectorAll<HTMLButtonElement>("[data-lens-size]")];
+const colourButtons = [...lensPanel.querySelectorAll<HTMLButtonElement>("[data-lens-colour]")];
+/** The type legend as the shell wrote it, restored whenever the type lens comes back. */
+const typeLegend = [...legendList.children].map((item) => item.cloneNode(true));
 
 // The hidden FileList fallback is a browser-only escape hatch. Keeping it focusable
 // in the native shell would expose an inert control to keyboard and screen-reader users.
 if (!platform.importSnapshot) folderFallback.hidden = true;
 
+const viewerDialog = getElement<HTMLDialogElement>("file-viewer");
 const viewer = new FileViewer(
   {
-    dialog: getElement<HTMLDialogElement>("file-viewer"),
+    dialog: viewerDialog,
     titlebar: getElement("viewer-titlebar"),
     title: getElement("viewer-title"),
     mode: getElement("viewer-mode"),
@@ -107,7 +134,267 @@ const world = new WorldScene(canvas, {
   onKeyboardNavigation: (active) => reticle.classList.toggle("is-keyboard-active", active),
   onSwapKeys: (swapped) => controls.classList.toggle("is-swapped", swapped),
   onEnterArea: adoptArea,
+  readFile: (node, signal) => platform.viewer.read(node, signal),
 });
+mountGlowToggle(getElement<HTMLButtonElement>("glow-button"), world, lifecycle.signal);
+
+/**
+ * The lens a viewer last chose, applied before the first district is drawn so the city
+ * arrives already in it rather than being rebuilt a moment later. Everything a lens needs
+ * to know — totals, git status — belongs to the source on screen and is dropped with it.
+ */
+const lensStore = lensStorage();
+let lens: LensChoice = readLensChoice(lensStore);
+let gitIndex: GitStatusIndex | null = null;
+let appliedColour: ColourMode = "type";
+world.setDirectorySize(lens.size);
+
+/** The git lens is only offered, and only honoured, once there is a status to show. */
+function effectiveColour(): ColourMode {
+  return lens.colour === "git" && !gitIndex ? "type" : lens.colour;
+}
+
+/**
+ * Where a node lives below the open folder, as names, for matching against git's paths.
+ * Only directories that have been walked into are known here, which is every directory a
+ * district has been built for, so every object on screen has an answer.
+ */
+function pathBelowRoot(node: FsNode): string[] | null {
+  const own = node.kind === "directory" ? ancestryById.get(node.id) : undefined;
+  if (own) return own.slice(1).map((part) => part.name);
+  const parent = node.parentId ? ancestryById.get(node.parentId) : undefined;
+  return parent ? [...parent.slice(1).map((part) => part.name), node.name] : null;
+}
+
+function applyColourLens(force = false): void {
+  const mode = effectiveColour();
+  // Repainting relabels every name on screen, which is worth doing for new data but not
+  // for a choice that changed nothing.
+  if (mode === "type" && appliedColour === "type" && !force) {
+    renderLensControls();
+    return;
+  }
+  appliedColour = mode;
+  if (mode === "age") world.setColourLens(createAgeLens(Date.now()));
+  else if (mode === "git" && gitIndex) world.setColourLens(createGitLens(gitIndex, pathBelowRoot));
+  else world.setColourLens(null);
+  renderLegend();
+  renderLensControls();
+}
+
+function renderLensControls(): void {
+  const colour = effectiveColour();
+  sizeButtons.forEach((button) => (button.ariaPressed = String(button.dataset.lensSize === lens.size)));
+  colourButtons.forEach((button) => {
+    button.ariaPressed = String(button.dataset.lensColour === colour);
+    if (button.dataset.lensColour === "git") button.hidden = !gitIndex;
+  });
+}
+
+function renderLegend(): void {
+  const mode = effectiveColour();
+  if (mode === "type") {
+    legendTitle.textContent = "OBJECT TYPES";
+    legendList.replaceChildren(...typeLegend.map((item) => item.cloneNode(true)));
+    return;
+  }
+  const { title, rows } = legendFor(mode);
+  legendTitle.textContent = title;
+  const items = rows.map((row) => {
+    const item = document.createElement("li");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.style.setProperty("--swatch", `#${row.color.toString(16).padStart(6, "0")}`);
+    item.append(swatch, row.label);
+    return item;
+  });
+  if (mode === "git" && gitIndex?.truncated) {
+    const note = document.createElement("li");
+    note.className = "legend-note";
+    note.textContent = "Showing the first 20,000 changes";
+    items.push(note);
+  }
+  legendList.replaceChildren(...items);
+}
+
+function chooseSize(size: LensChoice["size"]): void {
+  if (lens.size === size) return;
+  lens = { ...lens, size };
+  writeLensChoice(lensStore, lens);
+  if (size === "total") fillLoadedTotals(currentChildren());
+  world.setDirectorySize(size);
+  renderLensControls();
+  measureCurrentDirectory();
+  setStatus(size === "total" ? "Folder heights show everything inside them" : "Folder heights show their own listing");
+}
+
+function chooseColour(colour: ColourMode): void {
+  lens = { ...lens, colour };
+  writeLensChoice(lensStore, lens);
+  // Git is read again each time it is asked for, since the work tree may have moved on.
+  if (colour === "git") void refreshGitStatus();
+  applyColourLens();
+  if (selectedNode) updateSelection(selectedNode);
+}
+
+let gitRequest = 0;
+
+/** Reads the open folder's git status, if the platform can and the folder is in a work tree. */
+async function refreshGitStatus(): Promise<void> {
+  const request = (gitRequest += 1);
+  const source = filesystem;
+  let index: GitStatusIndex | null = null;
+  if (platform.gitStatus && source.isLocal) {
+    try {
+      const report = await platform.gitStatus(source);
+      index = report ? createGitStatusIndex(report) : null;
+    } catch (error) {
+      if (request === gitRequest && lens.colour === "git") {
+        setStatus(error instanceof Error ? error.message : "Git status is unavailable", true);
+      }
+    }
+  }
+  if (request !== gitRequest || source !== filesystem || lifecycle.signal.aborted) return;
+  gitIndex = index;
+  applyColourLens(effectiveColour() === "git");
+  if (selectedNode) updateSelection(selectedNode);
+}
+
+let lensOpen = false;
+
+/** Unfolds the panel under the toolbar on a narrow screen; on a wide one it never folds. */
+function setLensOpen(open: boolean): void {
+  lensOpen = open;
+  document.documentElement.toggleAttribute("data-lens-open", open);
+  lensButton.setAttribute("aria-expanded", String(open));
+}
+
+/** How often a long measurement lays its district out again with the totals so far. */
+const MEASURE_REFRESH_INTERVAL = 1200;
+/** Progress text is a courtesy; rewriting it faster than this is layout work for nothing. */
+const MEASURE_PROGRESS_INTERVAL = 150;
+let measuring: AbortController | null = null;
+let measuringId: string | null = null;
+/** Directories that could not be measured on this source, so a render does not retry them forever. */
+const unmeasurable = new Set<string>();
+
+/** How much of an in-memory tree is counted on the spot, before a layout, per folder. */
+const LOADED_TOTAL_LIMIT = 50_000;
+
+/**
+ * Totals the folders whose whole tree is already in memory — every folder of the demo, or
+ * of a snapshot import — before the district is laid out, so it is built at its final
+ * heights instead of rising flat and being rebuilt a moment later. Anything that would
+ * need a read is left to `measureCurrentDirectory`.
+ */
+function fillLoadedTotals(children: FsNode[]): void {
+  for (const node of children) {
+    if (node.kind !== "directory" || node.usage || !node.children) continue;
+    const usage = usageOfLoadedTree(node, LOADED_TOTAL_LIMIT);
+    if (usage.complete) node.usage = usage;
+  }
+}
+
+function measureUsage(node: FsNode, signal: AbortSignal, onProgress: (usage: DirectoryUsage) => void): Promise<DirectoryUsage> {
+  // The demo lives wholly in memory, so totalling it needs nothing from the platform.
+  if (filesystem.isLocal && platform.measureDirectory) return platform.measureDirectory(node, signal, onProgress);
+  return Promise.resolve(usageOfLoadedTree(node));
+}
+
+function showMeasuring(text: string | null): void {
+  lensProgress.hidden = text === null;
+  lensProgress.textContent = text ?? "";
+  document.documentElement.toggleAttribute("data-measuring", text !== null);
+}
+
+/**
+ * Totals every folder standing in the current district, one after another, while the
+ * size lens asks for totals. Each walk is the platform's to bound and to run off the
+ * frame; this only sequences them, lays the district out again as totals land, and
+ * abandons the lot the moment the view moves on to another directory or source.
+ */
+function measureCurrentDirectory(): void {
+  measuring?.abort();
+  measuring = null;
+  measuringId = null;
+  if (lens.size !== "total" || lifecycle.signal.aborted) {
+    showMeasuring(null);
+    return;
+  }
+  const directory = currentDirectory();
+  const source = filesystem;
+  const pending = currentChildren().filter((node) => node.kind === "directory" && !node.usage && !unmeasurable.has(node.id));
+  if (!pending.length) {
+    showMeasuring(null);
+    settleDirectoryTotal(directory);
+    return;
+  }
+  const controller = new AbortController();
+  measuring = controller;
+  const { signal } = controller;
+  const stillWanted = (): boolean => !signal.aborted && source === filesystem && !lifecycle.signal.aborted;
+  void (async () => {
+    let lastRefresh = performance.now();
+    let lastProgress = 0;
+    let measuredBytes = 0;
+    let dirty = false;
+    for (const [index, node] of pending.entries()) {
+      const step = `Measuring ${index + 1}/${pending.length}`;
+      showMeasuring(`${step} · ${formatBytes(measuredBytes)}`);
+      measuringId = node.id;
+      if (selectedNode?.id === node.id) updateSelection(selectedNode);
+      try {
+        const usage = await measureUsage(node, signal, (partial) => {
+          const now = performance.now();
+          if (now - lastProgress < MEASURE_PROGRESS_INTERVAL || !stillWanted()) return;
+          lastProgress = now;
+          showMeasuring(`${step} · ${formatBytes(measuredBytes + partial.bytes)}`);
+        });
+        if (!stillWanted()) return;
+        node.usage = usage;
+        measuredBytes += usage.bytes;
+        dirty = true;
+      } catch {
+        if (!stillWanted()) return;
+        unmeasurable.add(node.id);
+      }
+      if (selectedNode?.id === node.id) updateSelection(selectedNode);
+      if (dirty && performance.now() - lastRefresh > MEASURE_REFRESH_INTERVAL) {
+        world.refreshArea(directory.id);
+        dirty = false;
+        lastRefresh = performance.now();
+      }
+    }
+    if (measuring !== controller) return;
+    measuring = null;
+    measuringId = null;
+    if (dirty) world.refreshArea(directory.id);
+    showMeasuring(null);
+    settleDirectoryTotal(directory);
+  })();
+}
+
+/**
+ * Once every folder in it is measured, the directory itself has a total for free: its
+ * own files plus theirs. It is kept, so the district one level up can raise this
+ * directory's plot without walking it again.
+ */
+function settleDirectoryTotal(directory: FsNode): void {
+  if (!directory.usage && directory.children) {
+    directory.usage = combineUsage(directory.children);
+    if (directory.parentId) world.refreshArea(directory.parentId);
+  }
+  if (currentDirectory().id === directory.id) renderChrome();
+  if (selectedNode) updateSelection(selectedNode);
+  // The newest change beneath each folder arrives with its total, and age reads it.
+  if (effectiveColour() === "age") applyColourLens(true);
+}
+
+function describeTotal(node: FsNode): string {
+  if (node.usage) return formatUsage(node.usage);
+  if (measuringId === node.id) return "Measuring…";
+  return lens.size === "total" && !unmeasurable.has(node.id) ? "Waiting to measure" : "Not measured";
+}
 
 function currentDirectory(): FsNode {
   return ancestry[ancestry.length - 1];
@@ -138,18 +425,86 @@ type RouteIntent = "push" | "replace" | "keep";
  * mounted. That is rarely the first thing drawn: a lapsed folder grant is offered from
  * the toolbar rather than restored, so the directory named here can be one click away.
  */
-let pendingRoute = readRoute(window.location.hash);
+let pendingRoute: Route = readRoute(window.location.hash);
+const noRoute: Route = { names: [], object: null };
 
 function syncRoute(intent: RouteIntent): void {
   if (intent === "keep") return;
   // Going somewhere deliberately answers the opening address, whether or not it was the
   // place asked for. Nothing later is allowed to drag a mounted source back to it.
-  if (intent === "push") pendingRoute = [];
+  if (intent === "push") pendingRoute = noRoute;
   const names = ancestry.map((node) => node.name);
-  if (sameRoute(names, readRoute(window.location.hash))) return;
-  const url = routeFor(names);
+  const object = objectRoute();
+  const address = readRoute(window.location.hash);
+  if (sameRoute(names, address.names) && sameObject(object, address.object)) return;
+  const url = routeFor(names, object);
   if (intent === "push") window.history.pushState(null, "", url);
   else window.history.replaceState(null, "", url);
+}
+
+/**
+ * The object the address names beside the directory: the one whose window is open, or
+ * else the one selected. Only ever one living in the directory addressed — a selection
+ * left over from the directory just walked out of names nothing in the new one.
+ */
+function objectRoute(): RouteObject | null {
+  const here = currentDirectory();
+  if (heldObject?.directoryId === here.id) return heldObject.object;
+  const shown = viewer.shownNode;
+  if (shown?.parentId === here.id) return { name: shown.name, viewing: true };
+  if (selectedNode?.parentId === here.id) return { name: selectedNode.name, viewing: false };
+  return null;
+}
+
+/**
+ * Keeps the address in step with what is selected and open, without adding history. The
+ * directory is the place you went; what you picked out there is a detail of that visit,
+ * so it amends the entry rather than stacking one per click, and Back returns to the
+ * previous directory with whatever was selected in it when you left.
+ *
+ * Only an address already naming this directory is amended. One naming somewhere else is
+ * either being travelled to right now or held for a source not yet mounted, and in both
+ * cases writing it is `syncRoute`'s business, not a click's.
+ */
+function syncObjectRoute(): void {
+  if (lifecycle.signal.aborted) return;
+  const names = ancestry.map((node) => node.name);
+  const address = readRoute(window.location.hash);
+  if (!sameRoute(names, address.names)) return;
+  const object = objectRoute();
+  if (sameObject(object, address.object)) return;
+  window.history.replaceState(null, "", routeFor(names, object));
+}
+
+/**
+ * An object named by the opening address, waiting for the welcome screen to go. Nothing
+ * behind that screen moves, and a window opened over it would be the first thing a new
+ * visitor had to close, so the object is held — and kept in the address, so a reload
+ * still asks for it — until the screen is gone and the world is in view.
+ */
+let heldObject: { directoryId: string; object: RouteObject } | null = null;
+
+/**
+ * Selects the object an address names in the directory just arrived in, and reopens its
+ * window if the address says it was open. A name no longer there is dropped from the
+ * address rather than chased: the directory still landed, which is as near as it gets.
+ */
+function landObject(object: RouteObject | null): void {
+  if (!object || lifecycle.signal.aborted) return;
+  if (welcomeHold) {
+    heldObject = { directoryId: currentDirectory().id, object };
+    syncObjectRoute();
+    return;
+  }
+  if (sameObject(objectRoute(), object)) return;
+  const node = currentChildren().find((child) => child.name === object.name);
+  if (node && selectedNode?.id !== node.id) world.focusNode(node);
+  if (node && object.viewing && node.kind === "file") {
+    if (viewer.shownNode?.id !== node.id) void openNode(node);
+    return;
+  }
+  if (viewer.shownNode?.parentId === currentDirectory().id) viewer.close();
+  syncObjectRoute();
 }
 
 /** Updates every panel outside the 3D view. Never touches the camera. */
@@ -162,7 +517,8 @@ function renderChrome(): void {
   directoryTitle.textContent = current.name;
   const directories = children.filter((node) => node.kind === "directory").length;
   const files = children.length - directories;
-  directorySummary.textContent = `${children.length} objects · ${directories} ${directories === 1 ? "directory" : "directories"} · ${files} ${files === 1 ? "file" : "files"}`;
+  const total = current.usage ? ` · ${formatUsageBytes(current.usage)} in all` : "";
+  directorySummary.textContent = `${children.length} objects · ${directories} ${directories === 1 ? "directory" : "directories"} · ${files} ${files === 1 ? "file" : "files"}${total}`;
   renderBreadcrumbs();
   if (renderedDirectoryId !== current.id) {
     renderedDirectoryId = current.id;
@@ -193,6 +549,10 @@ function releaseBehindWelcome(): void {
   previousCrumbIds = [];
   renderBreadcrumbs();
   restartTitleTransition();
+  const held = heldObject;
+  heldObject = null;
+  if (held?.directoryId === currentDirectory().id) landObject(held.object);
+  else syncObjectRoute();
 }
 
 /** Replays the heading animation; the reflow is what lets it retrigger. */
@@ -263,9 +623,11 @@ async function renderDirectory(
   // drawing. adoptArea already wrote its own entry for whatever the camera actually
   // settled on, so an abandoned render reaching this line would otherwise double it.
   syncRoute(route);
+  if (lens.size === "total") fillLoadedTotals(children);
 
   try {
     world.setDirectory(current, children, direction);
+    measureCurrentDirectory();
   } catch (error) {
     // The chrome (breadcrumbs, address) has already committed to this directory; absorb
     // a layout failure here so the app keeps working instead of leaving the 3D world
@@ -289,6 +651,7 @@ function adoptArea(directoryId: string): void {
   renderChrome();
   updateSelection(null);
   setStatus(`Entered ${currentDirectory().name}`);
+  measureCurrentDirectory();
 }
 
 let previousCrumbIds: string[] = [];
@@ -327,6 +690,7 @@ function renderBreadcrumbs(): void {
 
 function updateSelection(node: FsNode | null): void {
   selectedNode = node;
+  syncObjectRoute();
   // Something being selected changes what the foot of a small screen is for: the panel
   // is the answer to the tap, and the strip that was standing under it stands down.
   document.documentElement.toggleAttribute("data-selection", Boolean(node));
@@ -348,6 +712,12 @@ function updateSelection(node: FsNode | null): void {
     [node.kind === "directory" ? "Objects" : "Size", node.kind === "directory" ? String(node.children?.length ?? "Not scanned") : formatBytes(node.size)],
     ["Modified", formatDate(node.modified)],
   ];
+  if (node.kind === "directory") metadata.splice(2, 0, ["Total", describeTotal(node)]);
+  if (effectiveColour() === "git" && gitIndex) {
+    const segments = pathBelowRoot(node);
+    const state = segments ? gitIndex.stateAt(segments, node.kind) : null;
+    if (state) metadata.push(["Git", state.charAt(0).toUpperCase() + state.slice(1)]);
+  }
   metadata.forEach(([term, description]) => {
     const row = document.createElement("div");
     const dt = document.createElement("dt");
@@ -379,7 +749,11 @@ function updateAim(node: FsNode | null): void {
 
 async function openNode(node: FsNode): Promise<void> {
   if (node.kind === "file") {
-    await viewer.open(node, pathFor(node, ancestry));
+    const opened = viewer.open(node, pathFor(node, ancestry));
+    // The window is up (or was refused) before `open` first waits on anything, so the
+    // address can say so now rather than once the payload has finished loading.
+    syncObjectRoute();
+    await opened;
     return;
   }
   if (opening?.id === node.id) return;
@@ -449,28 +823,42 @@ async function resolveRoute(source: FilesystemRoot, names: string[]): Promise<Fs
 /** Guards against a slow walk from an abandoned address landing after a newer one. */
 let routeGeneration = 0;
 
-/** Travels to wherever the address bar now points, without writing history back. */
-async function applyRoute(names: string[]): Promise<void> {
+/**
+ * Travels to wherever the address bar now points, without writing history back, then
+ * picks out the object it names there. An address for the directory already on screen
+ * can still differ in its object — edited by hand, or the second of a popstate and
+ * hashchange pair — and bringing the selection and window in line is all it asks for;
+ * an address naming no object there puts away a window open in this directory.
+ */
+async function applyRoute(route: Route): Promise<void> {
   const generation = (routeGeneration += 1);
   const settle = beginPending();
   let chain: FsNode[];
   try {
-    chain = await resolveRoute(filesystem, names);
+    chain = await resolveRoute(filesystem, route.names);
   } finally {
     settle();
   }
   if (generation !== routeGeneration || lifecycle.signal.aborted) return;
   // An address only partly resolved is an address that lies about where we are.
-  const intent: RouteIntent = chain.length === names.length ? "keep" : "replace";
+  const complete = chain.length === route.names.length;
+  const intent: RouteIntent = complete ? "keep" : "replace";
   const destination = chain[chain.length - 1];
   if (destination.id === currentDirectory().id) {
     syncRoute(intent);
+    if (!complete) return;
+    if (route.object) landObject(route.object);
+    else if (viewer.shownNode?.parentId === destination.id) viewer.close();
     return;
   }
   const direction: NavigationDirection = chain.length > ancestry.length ? "forward" : "backward";
   ancestry = chain;
   await renderDirectory(true, direction, intent);
+  if (complete && generation === routeGeneration && currentDirectory().id === destination.id) landObject(route.object);
 }
+
+/** Where a claimed address comes down: the directories walked, and the object to pick out at the end. */
+type Landing = { chain: FsNode[]; object: RouteObject | null };
 
 /**
  * Takes the address the page was opened with, if it names a path inside this source.
@@ -480,12 +868,15 @@ async function applyRoute(names: string[]): Promise<void> {
  * else mounted first — the demo standing in behind a welcome screen, a folder waiting on
  * a click — leaves the claim untouched for whatever comes after it.
  */
-async function claimPendingRoute(source: FilesystemRoot): Promise<FsNode[] | null> {
-  if (pendingRoute.length < 2 || pendingRoute[0] !== source.root.name) return null;
+async function claimPendingRoute(source: FilesystemRoot): Promise<Landing | null> {
   const wanted = pendingRoute;
-  pendingRoute = [];
-  const chain = await resolveRoute(source, wanted);
-  return chain.length > 1 ? chain : null;
+  if (wanted.names[0] !== source.root.name || (wanted.names.length < 2 && !wanted.object)) return null;
+  pendingRoute = noRoute;
+  const chain = await resolveRoute(source, wanted.names);
+  // The object is only looked for in the directory it was named in; a walk that stopped
+  // short has landed somewhere else, where the same name would be a different object.
+  const object = chain.length === wanted.names.length ? wanted.object : null;
+  return chain.length > 1 || object ? { chain, object } : null;
 }
 
 /**
@@ -499,8 +890,8 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
   }
   // Walking to a restored address belongs with the rest of the preparation, so a source
   // that arrives deep arrives already deep: one world built, in the right place.
-  let landing: FsNode[] | null = null;
-  return sourceTransition.replace(
+  let landing = null as Landing | null;
+  const mounted = await sourceTransition.replace(
     next,
     async (candidate) => {
       await platform.ensureChildren(candidate.root);
@@ -513,13 +904,21 @@ async function setFilesystem(next: FilesystemRoot, announcement?: string): Promi
       if (lifecycle.signal.aborted || !viewer.close()) return { status: "rejected" };
       const previous = filesystem;
       filesystem = candidate;
-      ancestry = landing ?? [candidate.root];
+      forgetTreeIndex();
+      heldObject = null;
+      ancestry = landing?.chain ?? [candidate.root];
       ancestryById.clear();
+      // Totals and status belong to the source they were read from.
+      unmeasurable.clear();
+      gitIndex = null;
+      void refreshGitStatus();
       const drawn = renderDirectory(!announcement, "initial", "replace");
       if (announcement) setStatus(announcement);
       return { status: "activated", previous, settled: drawn };
     },
   );
+  if (mounted) landObject(landing?.object ?? null);
+  return mounted;
 }
 
 function setStatus(message: string, isError = false): void {
@@ -631,166 +1030,173 @@ function withdrawReopenOffer(): void {
 
 /** Results are capped so a broad query returns a readable list instead of the whole tree. */
 const searchResultLimit = 25;
-let searchScope: "current" | "all" = "current";
+/**
+ * The most objects the whole-tree index will hold. Plenty for a project and most of a
+ * home folder; past it, queries are answered from what the walk reached first, which
+ * its breadth-first order makes the shallower and likelier part of the tree.
+ */
+const SEARCH_INDEX_LIMIT = 50_000;
+/**
+ * Directory reads the index keeps in flight: enough that one slow handle stalls a slot
+ * rather than the walk, few enough not to crowd out the directory someone is opening.
+ */
+const SEARCH_INDEX_CONCURRENCY = 6;
+/** How often a growing index may re-rank an open dialog; any faster reads as flicker. */
+const SEARCH_PROGRESS_INTERVAL_MS = 250;
+
 let resultButtons: HTMLButtonElement[] = [];
+let resultEntries: IndexedObject[] = [];
+let resultKey = "";
 let activeResultIndex = -1;
 
-/** How many unread directories one click of READ DEEPER pulls in. */
-const SEARCH_DEEPEN_BATCH = 64;
-/** How many of those reads run at once, so one slow handle does not stall the rest of the batch. */
-const SEARCH_DEEPEN_CONCURRENCY = 8;
 /**
- * Directories this dialog session already tried to read — successfully or not. Scoped
- * to one dialog's lifetime and cleared on open, so a permission grant made after closing
- * search gets a fresh chance instead of being remembered as a dead end forever.
+ * The mounted source's index, started the first time search is opened on it rather than
+ * when the source mounts. Walking a whole tree costs a listing per directory — and in the
+ * browser a metadata read per file — which is worth paying for someone searching and not
+ * for someone who came to look at one folder. Once started it runs on in the background,
+ * dialog open or not, so the next search is answered from the whole tree.
  */
-const attemptedUnread = new Set<string>();
+let treeIndex: TreeIndex | null = null;
+let treeIndexController: AbortController | null = null;
+
+function indexForSearch(): TreeIndex {
+  if (treeIndex?.root === filesystem.root) return treeIndex;
+  forgetTreeIndex();
+  const controller = new AbortController();
+  const index = new TreeIndex(filesystem.root, {
+    read: (node) => platform.ensureChildren(node),
+    signal: controller.signal,
+    limit: SEARCH_INDEX_LIMIT,
+    concurrency: SEARCH_INDEX_CONCURRENCY,
+    onProgress: () => {
+      if (treeIndex === index) scheduleIndexRender();
+    },
+  });
+  treeIndex = index;
+  treeIndexController = controller;
+  return index;
+}
+
+/** Stops the walk over a source that is going away; its partial index goes with it. */
+function forgetTreeIndex(): void {
+  treeIndexController?.abort();
+  treeIndexController = null;
+  treeIndex = null;
+  window.clearTimeout(indexRenderTimer);
+  indexRenderTimer = 0;
+}
+
+let indexRenderTimer = 0;
+let lastSearchRender = 0;
+
+/**
+ * Lets an open dialog catch up with a growing index at a steady pace. The walk reports
+ * each time it yields, which on a fast source is every frame, and re-ranking that often
+ * would spend the very frames the walk just handed back.
+ */
+function scheduleIndexRender(): void {
+  if (!searchDialog.open || indexRenderTimer) return;
+  const wait = Math.max(0, lastSearchRender + SEARCH_PROGRESS_INTERVAL_MS - performance.now());
+  indexRenderTimer = window.setTimeout(() => {
+    indexRenderTimer = 0;
+    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value, true);
+  }, wait);
+}
 
 function openSearch(): void {
   searchInput.value = "";
-  attemptedUnread.clear();
-  applySearchScope(searchScope);
+  searchInput.placeholder = `Search all of ${filesystem.root.name}…`;
+  renderSearchResults("");
   searchDialog.showModal();
   searchInput.focus();
 }
 
-function applySearchScope(scope: "current" | "all"): void {
-  searchScope = scope;
-  const effective = effectiveSearchScope();
-  // At the root the two scopes cover the same tree, so offering the choice is just noise.
-  scopeSwitch.hidden = ancestry.length === 1;
-  scopeCurrentButton.ariaPressed = String(effective === "current");
-  scopeAllButton.ariaPressed = String(effective === "all");
-  searchInput.placeholder = scopeSwitch.hidden || effective === "all"
-    ? "Search everything loaded…"
-    : "Search this directory and below…";
-  renderSearchResults(searchInput.value);
-}
-
-/** The stored preference survives a trip to the root, where it cannot mean anything. */
-function effectiveSearchScope(): "current" | "all" {
-  return ancestry.length === 1 ? "current" : searchScope;
-}
-
-function renderSearchResults(query: string): void {
-  searchResults.replaceChildren();
-  resultButtons = [];
+/**
+ * `keepActive` is for a list refreshed underneath someone — the index grew — where the
+ * row they had arrowed to should stay theirs. A new query starts again from the top.
+ */
+function renderSearchResults(query: string, keepActive = false): void {
+  lastSearchRender = performance.now();
+  const index = indexForSearch();
+  renderIndexProgress(index);
   const trimmed = query.trim();
-  const scope = effectiveSearchScope();
 
   if (!trimmed) {
     // An empty box browses the level you are standing on; listing whole trees is noise.
-    // There is no search outcome to deepen here, so the button stays out of the way.
-    searchDeepen.hidden = true;
-    if (scope === "all") {
-      searchCount.textContent = "";
-      searchResults.append(emptyResult("TYPE TO SEARCH EVERY LOADED OBJECT"));
-      setActiveResult(-1);
-      return;
-    }
     const children = currentChildren();
     searchCount.textContent = children.length > searchResultLimit
       ? `Showing ${searchResultLimit} of ${children.length} objects here`
       : `${children.length} ${children.length === 1 ? "object" : "objects"} here`;
-    renderMatches(children.slice(0, searchResultLimit).map((node) => ({ node, trail: ancestry })));
+    renderMatches(indexChildren(ancestry, children.slice(0, searchResultLimit)), false, keepActive);
     return;
   }
 
-  // Both scopes search nested directories; they differ only in where the walk starts.
-  const base = scope === "all" ? [filesystem.root] : ancestry;
-  const outcome = searchFilesystem(base, trimmed, { limit: searchResultLimit });
-  searchCount.textContent = describeOutcome(outcome);
-  renderMatches(outcome.matches);
-  updateDeepenButton(outcome, scope);
+  const outcome = searchIndex(index.entries, trimmed, { limit: searchResultLimit, here: currentDirectory().id });
+  const total = outcome.total.toLocaleString("en-US");
+  searchCount.textContent = outcome.total > outcome.matches.length
+    ? `Showing ${outcome.matches.length} of ${total}, refine to narrow`
+    : `${total} ${outcome.total === 1 ? "match" : "matches"}`;
+  renderMatches(outcome.matches, true, keepActive);
 }
 
 /**
- * Shows READ DEEPER only when there is somewhere left to read: the search itself
- * reported unread directories, and the frontier under this scope (minus whatever this
- * dialog session already tried) is not empty. The bounded walk below is what the click
- * would read anyway, so computing it here is not a second full search — it is capped at
- * the same batch size and doubles as the count in the button's label.
+ * Kept apart from the match count, and out of its live region: the count is the answer
+ * to what was typed and worth announcing, while this ticks over several times a second
+ * for as long as the walk runs and would drown it out.
  */
-function updateDeepenButton(outcome: SearchOutcome, scope: "current" | "all"): void {
-  if (outcome.unreadDirectories === 0) {
-    searchDeepen.hidden = true;
-    return;
-  }
-  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
-  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
-  searchDeepen.hidden = frontier.length === 0;
-  if (frontier.length > 0) {
-    searchDeepen.textContent = `READ ${Math.min(frontier.length, SEARCH_DEEPEN_BATCH)} MORE DIRECTORIES`;
-  }
+function renderIndexProgress(index: TreeIndex): void {
+  const count = index.entries.length;
+  const objects = `${count.toLocaleString("en-US")} ${count === 1 ? "object" : "objects"}`;
+  const unreadable = index.unreadable
+    ? ` · ${index.unreadable} ${index.unreadable === 1 ? "directory" : "directories"} unreadable`
+    : "";
+  searchProgress.dataset.state = index.status;
+  searchProgress.textContent = index.status === "indexing"
+    ? `Indexed ${objects}…${unreadable}`
+    : index.status === "capped"
+      ? `Index stops at ${objects}${unreadable}`
+      : `${objects} indexed${unreadable}`;
 }
 
-/**
- * Reads a batch of the unread frontier through the platform adapter, then re-runs the
- * query so results, counts and the button itself all catch up to what got read. A
- * directory that fails (denied, vanished) just stays unread — it is marked attempted so
- * this session will not spend another read on it.
- */
-async function deepenSearch(): Promise<void> {
-  const scope = effectiveSearchScope();
-  const scopeBase = scope === "all" ? filesystem.root : currentDirectory();
-  const frontier = unreadDirectoriesUnder(scopeBase, SEARCH_DEEPEN_BATCH, attemptedUnread);
-  if (!frontier.length) return;
-  for (const node of frontier) attemptedUnread.add(node.id);
-  searchDeepen.disabled = true;
-  const settle = beginPending();
-  try {
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < frontier.length) {
-        const node = frontier[next];
-        next += 1;
-        try {
-          await platform.ensureChildren(node);
-        } catch {
-          // Swallowed: a denied or vanished directory just stays unread, and
-          // attemptedUnread already keeps this session from retrying it.
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(SEARCH_DEEPEN_CONCURRENCY, frontier.length) }, worker));
-  } finally {
-    settle();
-    searchDeepen.disabled = false;
-    // A read that lands after the dialog closed only warms the cache — no DOM to update.
-    if (!lifecycle.signal.aborted && searchDialog.open) renderSearchResults(searchInput.value);
-  }
-}
-
-function renderMatches(matches: SearchMatch[]): void {
-  if (!matches.length) {
-    searchResults.append(emptyResult("NO MATCHING OBJECTS"));
+function renderMatches(entries: IndexedObject[], showLocation: boolean, keepActive: boolean): void {
+  // A growing index re-ranks to the same list most of the time; rebuilding identical rows
+  // would only flicker under the pointer and throw away the row being hovered.
+  const key = `${showLocation}\n${entries.map((entry) => entry.node.id).join("\n")}`;
+  if (entries.length && key === resultKey) return;
+  const activeId = keepActive ? resultEntries[activeResultIndex]?.node.id : undefined;
+  resultKey = key;
+  resultEntries = entries;
+  resultButtons = [];
+  searchResults.replaceChildren();
+  if (!entries.length) {
+    searchResults.append(emptyResult(treeIndex?.status === "indexing" ? "NO MATCHES YET · STILL INDEXING" : "NO MATCHING OBJECTS"));
     setActiveResult(-1);
     return;
   }
-  matches.forEach((match, index) => {
-    const { node, trail } = match;
-    const item = document.createElement("li");
-    const button = document.createElement("button");
+  entries.forEach((entry, index) => {
+    const { node } = entry;
+    const item = el("li");
+    const button = el("button");
     button.type = "button";
     button.id = `search-result-${index}`;
     button.role = "option";
-    button.innerHTML = `<i class="result-glyph category-${categoryOf(node)}" aria-hidden="true"></i><span><strong></strong><small></small></span><kbd class="key-glyph">↵</kbd>`;
-    const strong = button.querySelector("strong");
-    if (strong) strong.textContent = node.name;
-    const detail = button.querySelector("small");
+    const glyph = el("i", `result-glyph category-${categoryOf(node)}`);
+    glyph.ariaHidden = "true";
     const measure = node.kind === "directory" ? `${node.children?.length ?? "?"} objects` : formatBytes(node.size);
-    if (detail) {
-      const elsewhere = trail[trail.length - 1].id !== currentDirectory().id;
-      detail.textContent = elsewhere ? `${measure} · ${trail.map((part) => part.name).join("/")}` : measure;
-    }
-    button.addEventListener("click", () => void revealMatch(match), listener);
+    const detail = el("small", undefined, measure);
+    if (showLocation) detail.append(" · ", el("span", "result-location", locationOf(entry)));
+    const text = el("span");
+    text.append(el("strong", undefined, node.name), detail);
+    button.append(glyph, text, el("kbd", "key-glyph", "↵"));
+    button.addEventListener("click", () => void revealMatch(entry), listener);
     // Keep pointer and keyboard on the same row, so there is only ever one highlight.
     button.addEventListener("pointerenter", () => setActiveResult(index), listener);
     item.append(button);
     searchResults.append(item);
     resultButtons.push(button);
   });
-  setActiveResult(0);
+  const kept = activeId === undefined ? -1 : entries.findIndex((entry) => entry.node.id === activeId);
+  setActiveResult(Math.max(kept, 0));
 }
 
 /** Highlights a result without moving focus; the input keeps it so typing never breaks. */
@@ -812,44 +1218,37 @@ function moveActiveResult(step: number): void {
   setActiveResult(next);
 }
 
-function describeOutcome(outcome: SearchOutcome): string {
-  const counted = `${outcome.complete ? "" : "over "}${outcome.total}`;
-  const headline = outcome.total > outcome.matches.length
-    ? `Showing ${outcome.matches.length} of ${counted}, refine to narrow`
-    : `${counted} ${outcome.total === 1 ? "match" : "matches"}`;
-  // Local directories load lazily, so say plainly which part of the tree was not looked at.
-  return outcome.unreadDirectories > 0
-    ? `${headline} · ${outcome.unreadDirectories} unopened ${outcome.unreadDirectories === 1 ? "directory" : "directories"} not indexed`
-    : headline;
-}
-
 function emptyResult(message: string): HTMLLIElement {
-  const empty = document.createElement("li");
-  empty.className = "search-empty";
-  empty.textContent = message;
-  return empty;
+  return el("li", "search-empty", message);
 }
 
 /**
- * A result is a destination, not a highlight: picking one does what double-clicking the
- * object in the world would do. The directory holding it is travelled to first, since a
- * match from elsewhere in the tree has no district on screen to open anything in.
+ * A result is a destination, not a highlight: the directory holding it is travelled to,
+ * since a match from elsewhere in the tree has no district on screen to show it in, and
+ * then the object is framed and selected there.
  *
- * That travel is awaited rather than fired off. Building a district takes the camera and
+ * A directory goes one step further and is entered, because that is the only thing to
+ * do with one. A file stops at being selected: now that search reaches the whole tree, a
+ * result is often somewhere never visited, and landing beside it — seeing what it sits
+ * among — is the point of flying there. Opening it is then one more press away.
+ *
+ * The travel is awaited rather than fired off. Building a district takes the camera and
  * clears the selection, so a match framed before it lands is a match it un-frames.
  */
-async function revealMatch(match: SearchMatch): Promise<void> {
+async function revealMatch(entry: IndexedObject): Promise<void> {
   searchDialog.close();
-  const destination = match.trail[match.trail.length - 1];
+  const destination = entry.trail[entry.trail.length - 1];
   if (destination.id !== currentDirectory().id) {
-    const direction: NavigationDirection = match.trail.length > ancestry.length ? "forward" : "backward";
-    ancestry = [...match.trail];
+    const direction: NavigationDirection = entry.trail.length > ancestry.length ? "forward" : "backward";
+    ancestry = [...entry.trail];
     await renderDirectory(true, direction);
   }
-  // Frame it, then open it. What opening means is `openNode`'s question to answer, and a
-  // directory answers it by flying into itself, which takes the camera off the approach.
-  world.focusNode(match.node);
-  await openNode(match.node);
+  world.focusNode(entry.node);
+  if (entry.node.kind === "directory") {
+    await openNode(entry.node);
+    return;
+  }
+  if (selectedNode?.id === entry.node.id) setStatus(`Found ${entry.node.name} in ${locationOf(entry)}`);
 }
 
 function trimName(name: string, length: number): string {
@@ -881,7 +1280,6 @@ demoButton.addEventListener("click", () => {
 }, listener);
 enterButton.addEventListener("click", () => selectedNode && void openNode(selectedNode), listener);
 searchButton.addEventListener("click", openSearch, listener);
-searchDeepen.addEventListener("click", () => void deepenSearch(), listener);
 helpButton.addEventListener("click", () => helpDialog.showModal(), listener);
 // Escape is the desktop way out of these, and pressing the page behind them is the
 // same gesture for a hand that has no Escape key to reach for.
@@ -906,14 +1304,6 @@ searchDialog.addEventListener("keydown", (event) => {
     event.preventDefault();
     active.click();
   }
-}, listener);
-scopeCurrentButton.addEventListener("click", () => {
-  applySearchScope("current");
-  searchInput.focus();
-}, listener);
-scopeAllButton.addEventListener("click", () => {
-  applySearchScope("all");
-  searchInput.focus();
 }, listener);
 folderFallback.addEventListener("change", () => {
   if (!folderFallback.files || !platform.importSnapshot) return;
@@ -969,7 +1359,24 @@ function releaseWhenWelcomeHasGone(): void {
   failsafe = window.setTimeout(release, 400);
 }
 
+sizeButtons.forEach((button) => button.addEventListener("click", () => chooseSize(button.dataset.lensSize === "total" ? "total" : "own"), listener));
+colourButtons.forEach((button) => button.addEventListener("click", () => {
+  const colour = button.dataset.lensColour;
+  chooseColour(colour === "age" || colour === "git" ? colour : "type");
+}, listener));
+lensButton.addEventListener("click", () => setLensOpen(!lensOpen), listener);
+// Touching the view is going back to it, so the folded panel gets out of the way.
+canvas.addEventListener("pointerdown", () => lensOpen && setLensOpen(false), listener);
+applyColourLens();
+void refreshGitStatus();
+
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && lensOpen && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    setLensOpen(false);
+    lensButton.focus();
+    return;
+  }
   // Camera movement keys are owned by WorldScene; it reports back via onKeyboardNavigation.
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
@@ -1026,6 +1433,9 @@ window.addEventListener("pointerdown", (event) => {
 // writes no entry of ours to traverse. A browser that fires both for one step arrives
 // twice at the same directory, and the second arrival has nothing left to do.
 window.addEventListener("popstate", () => void applyRoute(readRoute(window.location.hash)), listener);
+// Every way a window is put away — its lights, Escape, a press outside, a newer source —
+// ends in this event, after the viewer has already forgotten what it was showing.
+viewerDialog.addEventListener("close", syncObjectRoute, listener);
 window.addEventListener("hashchange", () => void applyRoute(readRoute(window.location.hash)), listener);
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1066,8 +1476,9 @@ async function settleInitialView(): Promise<boolean> {
     // The demo is a real source with real directories, so an address into it is restored
     // like any other. This one is already mounted, so the walk happens here.
     const landing = await claimPendingRoute(filesystem);
-    if (landing) ancestry = landing;
+    if (landing) ancestry = landing.chain;
     await renderDirectory(false, "initial", "replace");
+    landObject(landing?.object ?? null);
   } catch (error) {
     releaseBehindWelcome();
     throw error;
@@ -1110,9 +1521,13 @@ return {
   destroy: () => {
     if (destroyPromise) return destroyPromise;
     lifecycle.abort();
+    forgetTreeIndex();
     document.documentElement.removeAttribute("data-selection");
     sourceTransition.invalidate();
     renderGeneration += 1;
+    measuring?.abort();
+    document.documentElement.removeAttribute("data-measuring");
+    document.documentElement.removeAttribute("data-lens-open");
     viewer.destroy();
     world.destroy();
     destroyPromise = sourceTransition.dispose(filesystem);

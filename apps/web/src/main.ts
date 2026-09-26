@@ -6,25 +6,30 @@ import {
   directoryHandleFor,
   disposeBrowserFilesystem,
   ensureChildren,
+  measureDirectory,
   openBrowserDirectory,
   peekChildren,
   readBrowserResource,
+  registerBrowserGeneratedResource,
   registerBrowserTextResource,
   registerBrowserUrlResource,
   rootFromDirectoryHandle,
   rootFromFileList,
 } from "./filesystem";
 import { directoryPermission, forgetSource, recallSource, rememberSource } from "./recent";
+import { recoverFromStaleBuilds } from "./stale-build";
 
 inject({
   mode: import.meta.env.PROD ? "production" : "development",
   beforeSend: stripFragment,
 });
+recoverFromStaleBuilds();
 
 const platform: NavigatorPlatform = {
   demoResources: {
     text: registerBrowserTextResource,
     url: registerBrowserUrlResource,
+    bytes: registerBrowserGeneratedResource,
   },
   viewer: {
     read: readBrowserResource,
@@ -40,6 +45,7 @@ const platform: NavigatorPlatform = {
   importSnapshot: rootFromFileList,
   ensureChildren,
   peekChildren,
+  measureDirectory,
   disposeFilesystem: disposeBrowserFilesystem,
   rememberDemo: async () => rememberSource({ mode: "demo" }),
   rememberFilesystem: async (filesystem) => {

@@ -8,6 +8,13 @@ describe("stripFragment", () => {
     );
   });
 
+  it("drops a selected object and its open window along with the directory", () => {
+    // The selection rides after a `?` inside the fragment; it must not survive as a query.
+    expect(stripFragment({ url: "https://example.com/#/Home/Taxes?select=2025%20return.pdf&view" }).url).toBe(
+      "https://example.com/",
+    );
+  });
+
   it("leaves a url without a fragment unchanged", () => {
     expect(stripFragment({ url: "https://example.com/path" }).url).toBe("https://example.com/path");
   });

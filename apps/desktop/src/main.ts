@@ -8,15 +8,20 @@ import {
   canEditDesktopText,
   canOpenDesktopNative,
   ensureChildren,
+  measureDesktopDirectory,
   openDesktopDirectory,
   openDesktopNative,
   peekChildren,
+  readDesktopGitStatus,
   readDesktopResource,
   writeDesktopText,
 } from "./filesystem";
 import { createWriteProtocol } from "./write-protocol";
 
-type DemoResource = { kind: "text"; content: string } | { kind: "url"; url: string };
+type DemoResource =
+  | { kind: "text"; content: string }
+  | { kind: "url"; url: string }
+  | { kind: "generated"; read: () => Promise<Blob> };
 const demoResources = new Map<string, DemoResource>();
 const DESKTOP_MODE_KEY = "fsn.desktop.last-mode";
 const writeProtocol = createWriteProtocol();
@@ -29,6 +34,7 @@ const registerDemo = (id: string, resource: DemoResource): FsResource => {
 const demoFactory: DemoResourceFactory = {
   text: (id, content) => registerDemo(id, { kind: "text", content }),
   url: (id, url) => registerDemo(id, { kind: "url", url }),
+  bytes: (id, read) => registerDemo(id, { kind: "generated", read }),
 };
 
 function disposeDemoFilesystem(filesystem: FilesystemRoot): void {
@@ -49,6 +55,7 @@ const platform: NavigatorPlatform = {
     read: async (node, signal) => {
       const demo = node.resource ? demoResources.get(node.resource.id) : undefined;
       if (demo?.kind === "text") return new Blob([demo.content], { type: "text/plain" });
+      if (demo?.kind === "generated") return demo.read();
       if (demo?.kind === "url") {
         const response = await fetch(demo.url, { signal });
         if (!response.ok) throw new Error(`Demo object unavailable (HTTP ${response.status}).`);
@@ -110,6 +117,9 @@ const platform: NavigatorPlatform = {
   },
   ensureChildren,
   peekChildren,
+  measureDirectory: measureDesktopDirectory,
+  // Only a picked folder has a native root for the backend to read; the demo never does.
+  gitStatus: async (filesystem) => (filesystem.isLocal ? readDesktopGitStatus() : null),
   disposeFilesystem: disposeDemoFilesystem,
   rememberDemo: async () => {
     await clearDesktopRoot();

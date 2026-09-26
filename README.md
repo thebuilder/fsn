@@ -26,8 +26,10 @@ pnpm dev:desktop
 - Drag to orbit; right-drag to pan; scroll to move through the world.
 - Move with `W`, `A`, `S`, `D` or the arrow keys.
 - Click an object to inspect it; double-click a directory to enter it; `Backspace` returns to the parent.
-- Press `/` or `Cmd/Ctrl + K` to search the current directory.
-- FSN writes the current directory into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off.
+- Press `/` or `Cmd/Ctrl + K` to search everything in the open folder. The first search indexes it in the background; picking a result flies to it.
+- FSN writes the current directory, and the object selected there, into the location fragment, so back and forward retrace the directories you walked and a reload lands where you left off, viewer window and all.
+
+The lens panel (bottom right, or behind the layers button on a narrow screen) changes what the city shows. **Size: Total** raises each folder by everything inside it, measured in the background. **Colour: Age** heats objects by how recently they changed. On desktop, **Colour: Git** appears when the folder is inside a git work tree and colours objects by their status. Your choice is remembered in this browser.
 
 Opening an object gives you an old-school viewer window: text and source, images, 3D models, audio and video, CSV/TSV, JSON, zip manifests, font specimens, PDFs. Audio and video come with a hand-built transport and a choice of visualizers. Anything without a viewer gets an access-denied screen with a hex-dump override. On desktop, the file policy can instead hand it to its native application.
 
@@ -35,7 +37,7 @@ Opening an object gives you an old-school viewer window: text and source, images
 
 Nothing is uploaded. The **Open folder** control uses the File System Access API where available and falls back to a `webkitdirectory` snapshot. All reading and rendering happens in the browser, and the web app never writes to a file. The address fragment holds directory names from the folder you opened, so analytics strips the fragment from every event before sending it.
 
-The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root. There is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables. Text edits save only after an explicit click, using atomic replacement.
+The desktop app gets access only to the directory you choose in the native picker. A Rust-owned active-root capability validates every native filesystem command, and picking another folder revokes the old root. There is no static home-directory or global filesystem scope. Opening a file natively resolves it against that root and refuses symlinks, `..`, absolute components, and executables. Text edits save only after an explicit click, using atomic replacement. Git status is read in-process with gitoxide at reduced trust, so a repository's hooks, fsmonitor and filter programs never run.
 
 ## Workspace
 
@@ -48,7 +50,7 @@ FSN is a pnpm workspace with two separate application shells, orchestrated by [T
 | `packages/core` | Platform-neutral filesystem model, classification, search, formatting, parsers. |
 | `packages/app` | Shared navigator controller, WebGL scene, viewers, styles, shell markup, demo assets. |
 
-`CLAUDE.md` covers the conventions that hold across them. The shared demo model is generated; regenerate it with `node packages/app/tools/make-demo-model.mjs`.
+`CLAUDE.md` covers the conventions that hold across them. The shared demo model is generated; regenerate it with `node packages/app/tools/make-demo-model.mjs`. The demo filesystem's other binaries (archives, sound, the manual PDF, the contact sheet and the locked system files) are not committed: `packages/app/src/demo-content` builds them in the page, deterministically, the first time each is opened.
 
 ## Verification
 
@@ -83,3 +85,5 @@ The demo filesystem plays **"Vice"** from *White Bat XVII*.
 > Music by Karl Casey @ White Bat Audio: <https://karlcasey.bandcamp.com/album/white-bat-xvii>
 
 The credit travels with the file. The sound player shows it whenever the track is opened, and `Music/credits.txt` in the demo filesystem repeats it.
+
+The demo's `System/Fonts/Kenney Pixel.ttf` is Kenney's pixel font, public domain under [CC0](https://creativecommons.org/publicdomain/zero/1.0/), from <https://www.kenney.nl/assets/kenney-fonts> by way of the three.js examples, re-saved to repair a character map that Chromium refused to load.

@@ -1,3 +1,5 @@
+import type { DirectoryUsage } from "./usage";
+
 export type FsKind = "file" | "directory";
 
 export type FileCategory =
@@ -37,6 +39,8 @@ export type FsNode = {
   demoCredit?: { text: string; href?: string };
   /** Cheap listing used to size and preview this directory from the outside. */
   peek?: DirectoryPeek;
+  /** Everything beneath this directory, once something has walked it to find out. */
+  usage?: DirectoryUsage;
 };
 
 /** What a directory looks like from the outside: how much it holds, and of what kinds. */
@@ -44,7 +48,29 @@ export type DirectoryPeek = {
   total: number;
   /** Category per child, in listing order, capped at `DIRECTORY_PEEK_LIMIT`. */
   categories: FileCategory[];
+  /**
+   * Name per child, aligned with `categories`, so a lens can say something about the
+   * child a marker stands for. Optional, because a peek only has to count to do its job.
+   */
+  names?: string[];
+  /** Modification time per child where the listing knew one, aligned with `categories`. */
+  modified?: (number | undefined)[];
 };
+
+/**
+ * The peek a directory's children already answer, for adapters that have read them. The
+ * names and times ride along so a marker on the plot can be coloured like the object it
+ * stands for.
+ */
+export function peekFromChildren(children: FsNode[]): DirectoryPeek {
+  const shown = children.slice(0, DIRECTORY_PEEK_LIMIT);
+  return {
+    total: children.length,
+    categories: shown.map(categoryOf),
+    names: shown.map((child) => child.name),
+    modified: shown.map((child) => child.modified),
+  };
+}
 
 /** No preview draws more markers than this, so there is nothing to gain by reading further. */
 export const DIRECTORY_PEEK_LIMIT = 64;
@@ -207,122 +233,6 @@ export function sortNodes(nodes: FsNode[]): FsNode[] {
     if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   });
-}
-
-export type SearchMatch = {
-  node: FsNode;
-  /** Directory chain from the filesystem root down to the match's parent. */
-  trail: FsNode[];
-};
-
-export type SearchOutcome = {
-  matches: SearchMatch[];
-  /** Every match found, including the ones trimmed off by the limit. */
-  total: number;
-  /** Directories that exist but have not been read from disk yet, so their contents are invisible. */
-  unreadDirectories: number;
-  /** False when the walk hit its ceiling, so the counts above are lower bounds. */
-  complete: boolean;
-};
-
-/** Ceiling on how many nodes a single query may walk, so a huge tree cannot freeze the frame. */
-const searchVisitLimit = 20000;
-/** Candidates kept for ranking; anything past this is counted but never shown. */
-const searchCandidateLimit = 200;
-
-/**
- * Walks the whole subtree under `base` (an ancestry chain ending at the directory to
- * search), breadth-first so shallow matches are found first. It only descends into
- * directories already read into memory; searching never triggers new disk access.
- */
-export function searchFilesystem(
-  base: FsNode[],
-  query: string,
-  options: { limit: number },
-): SearchOutcome {
-  const normalized = query.trim().toLowerCase();
-  const candidates: SearchMatch[] = [];
-  const queue: FsNode[][] = [base];
-  let total = 0;
-  let unreadDirectories = 0;
-  let visited = 0;
-  let complete = true;
-
-  // Adapters store `children` sorted at read time, and the ranking below re-orders
-  // every survivor anyway — so sorting here would buy nothing but the cost of an
-  // options-object `localeCompare` per directory visited. An index cursor replaces
-  // popping the array from its front, so growing the frontier stays O(1) instead of O(n).
-  let head = 0;
-  while (head < queue.length) {
-    const trail = queue[head];
-    head += 1;
-    const children = trail[trail.length - 1].children ?? [];
-    for (const node of children) {
-      visited += 1;
-      if (visited > searchVisitLimit) {
-        complete = false;
-        head = queue.length;
-        break;
-      }
-      if (!normalized || node.name.toLowerCase().includes(normalized)) {
-        total += 1;
-        if (candidates.length < searchCandidateLimit) candidates.push({ node, trail });
-      }
-      if (node.kind !== "directory") continue;
-      if (node.children) queue.push([...trail, node]);
-      else unreadDirectories += 1;
-    }
-  }
-
-  candidates.sort((a, b) => {
-    const rank = matchRank(a.node.name, normalized) - matchRank(b.node.name, normalized);
-    if (rank !== 0) return rank;
-    if (a.trail.length !== b.trail.length) return a.trail.length - b.trail.length;
-    if (a.node.kind !== b.node.kind) return a.node.kind === "directory" ? -1 : 1;
-    return a.node.name.localeCompare(b.node.name, undefined, { numeric: true, sensitivity: "base" });
-  });
-
-  return { matches: candidates.slice(0, options.limit), total, unreadDirectories, complete };
-}
-
-/**
- * The unread frontier under `base`: directories whose contents search cannot see.
- * Breadth-first and capped, so one deepening step reads the shallowest unknowns first.
- * Pure, no I/O — it only reports which nodes a caller could read next.
- */
-export function unreadDirectoriesUnder(
-  base: FsNode,
-  limit: number,
-  exclude?: ReadonlySet<string>,
-): FsNode[] {
-  const frontier: FsNode[] = [];
-  // Same index-cursor queue as searchFilesystem, for the same reason: growing the
-  // frontier stays O(1) instead of paying to shift the array on every directory visited.
-  const queue: FsNode[] = [base];
-  let head = 0;
-  while (head < queue.length && frontier.length < limit) {
-    const node = queue[head];
-    head += 1;
-    for (const child of node.children ?? []) {
-      if (child.kind !== "directory") continue;
-      if (child.children) {
-        queue.push(child);
-        continue;
-      }
-      if (exclude?.has(child.id)) continue;
-      frontier.push(child);
-      if (frontier.length >= limit) break;
-    }
-  }
-  return frontier;
-}
-
-/** Name matches sort ahead of the rest: whole prefix, then word start, then anywhere. */
-function matchRank(name: string, query: string): number {
-  if (!query) return 2;
-  const index = name.toLowerCase().indexOf(query);
-  if (index === 0) return 0;
-  return index > 0 && /[\s._\-/]/.test(name[index - 1]) ? 1 : 2;
 }
 
 export function pathFor(node: FsNode, ancestry: FsNode[]): string {

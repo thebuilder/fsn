@@ -12,6 +12,9 @@
       <button class="icon-button" id="search-button" type="button" aria-label="Search files" title="Search (⌘K)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
       </button>
+      <button class="icon-button lens-button" id="lens-button" type="button" aria-label="Lenses" aria-expanded="false" aria-controls="lens-panel" title="Lenses">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 8.5l9 4.5 9-4.5z"/><path d="m3 12.5 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg>
+      </button>
       <button class="button button-secondary" id="demo-button" type="button">Demo world</button>
       <button class="button button-primary" id="folder-button" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5H3z"/></svg>
@@ -45,9 +48,30 @@
     <button class="button button-primary enter-button" id="enter-button" type="button" hidden>Enter directory <span aria-hidden="true">↗</span></button>
   </aside>
 
-  <section class="legend" aria-label="File type legend">
-    <p class="eyebrow">OBJECT TYPES</p>
-    <ul>
+  <!-- The lenses and the legend they change share one panel: the legend is only ever
+       true for the lens chosen above it. On a small screen the panel is folded behind
+       the lens button in the toolbar rather than taking a corner of the view for good. -->
+  <section class="legend" id="lens-panel" aria-label="Lenses and legend">
+    <div class="lens-controls">
+      <div class="lens-row">
+        <span class="lens-label" id="lens-size-label">Size</span>
+        <div class="scope-switch" role="group" aria-labelledby="lens-size-label">
+          <button class="scope-button" type="button" data-lens-size="own" aria-pressed="true" title="Each folder by its own listing">Own</button>
+          <button class="scope-button" type="button" data-lens-size="total" aria-pressed="false" title="Each folder by everything inside it">Total</button>
+        </div>
+      </div>
+      <div class="lens-row">
+        <span class="lens-label" id="lens-colour-label">Colour</span>
+        <div class="scope-switch" role="group" aria-labelledby="lens-colour-label">
+          <button class="scope-button" type="button" data-lens-colour="type" aria-pressed="true" title="Colour by file type">Type</button>
+          <button class="scope-button" type="button" data-lens-colour="age" aria-pressed="false" title="Colour by when it last changed">Age</button>
+          <button class="scope-button" type="button" data-lens-colour="git" aria-pressed="false" title="Colour by git status" hidden>Git</button>
+        </div>
+      </div>
+      <p class="lens-progress" id="lens-progress" role="status" hidden></p>
+    </div>
+    <p class="eyebrow" id="legend-title">OBJECT TYPES</p>
+    <ul id="legend-list">
       <li><i class="swatch swatch-directory"></i>Directory</li>
       <li><i class="swatch swatch-code"></i>Code</li>
       <li><i class="swatch swatch-media"></i>Media</li>
@@ -65,6 +89,9 @@
     <p data-input="keys"><kbd>W A S D</kbd> <span class="role"><span class="role-default">Fly</span><span class="role-alt">Turn</span></span></p>
     <p data-input="keys"><kbd class="key-glyph">↑ ↓ ← →</kbd> <span class="role"><span class="role-default">Turn</span><span class="role-alt">Fly</span></span> · <kbd class="key-alt">Alt</kbd> Swap</p>
     <p data-input="keys"><kbd>Shift</kbd> Boost</p>
+    <!-- A look, not a binding, but it lives here because this is the strip every device
+         keeps: the one switch for the phosphor glow, remembered per viewer. -->
+    <button class="key-button glow-button" id="glow-button" type="button" aria-pressed="false" title="Phosphor glow"><i class="glow-lamp" aria-hidden="true"></i> Glow</button>
     <button class="key-button" id="help-button" type="button" aria-haspopup="dialog" title="All controls (?)"><kbd class="key-glyph" aria-hidden="true">?</kbd> All controls</button>
   </section>
 
@@ -78,18 +105,14 @@
     <div class="search-header">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
       <label class="visually-hidden" for="search-input" id="search-title">Search files</label>
-      <input id="search-input" type="search" placeholder="Search this directory and below…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
+      <input id="search-input" type="search" placeholder="Search everything…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-results" aria-autocomplete="list" />
       <button class="key-button" type="submit" aria-label="Close search">ESC</button>
     </div>
-    <div class="search-scope">
-      <div class="scope-switch" id="scope-switch" role="group" aria-label="Search scope">
-        <button class="scope-button" id="scope-current" type="button" aria-pressed="true">This directory</button>
-        <button class="scope-button" id="scope-all" type="button" aria-pressed="false">Everywhere</button>
-      </div>
+    <div class="search-meta">
+      <p class="search-progress" id="search-progress"></p>
       <p class="search-count" id="search-count" aria-live="polite"></p>
     </div>
     <ul class="search-results" id="search-results" role="listbox" aria-label="Search results"></ul>
-    <button class="button button-secondary search-deepen" id="search-deepen" type="button" hidden>READ DEEPER</button>
   </form>
 </dialog>
 
