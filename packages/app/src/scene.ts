@@ -11,6 +11,7 @@ import {
   type Decor,
   type Placement,
 } from "./layout";
+import { LinkNetwork, type LinkFootprint } from "./links";
 import {
   createScanCage,
   createScanDepthMaterial,
@@ -43,6 +44,8 @@ type DirectoryArea = {
   center: THREE.Vector3;
   radius: number;
   peakHeight: number;
+  /** The floor's rim, where a wire from the parent's plot comes in. */
+  footprint: LinkFootprint;
   placements: Placement[];
   /** Every mesh holding preview markers, so the reveal can flag one update per mesh. */
   decorMeshes: THREE.InstancedMesh[];
@@ -386,6 +389,8 @@ export class WorldScene {
   private readonly glowTexture = createGlowTexture();
   /** A label that is never shown, kept so its shader program is compiled ahead of need. */
   private readonly labelPrimer = makeLabel("", "#000000");
+  /** Wires from each visited folder's plot to its district; outside every area's group. */
+  private readonly links = new LinkNetwork();
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -512,6 +517,12 @@ export class WorldScene {
     this.gridMaterial = environment.gridMaterial;
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
+    this.scene.add(this.links.group);
+    // Primers are drawn once per warm-up, so they must never cover a pixel or be culled.
+    for (const primer of this.primers()) {
+      primer.scale.setScalar(0);
+      primer.frustumCulled = false;
+    }
 
     this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
     this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
@@ -568,6 +579,7 @@ export class WorldScene {
       area = this.createArea(directory.id, center, layout, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
+      this.connectArea(area, directory);
       this.warmUp(area);
       isNew = true;
     }
@@ -600,6 +612,9 @@ export class WorldScene {
     this.disposeAreaObjects(area.group);
     this.worldGroup.remove(area.group);
     this.areas.delete(directoryId);
+    // Both ends go: the wire in, and the wires out from plots that are about to be
+    // replaced. The rebuild lays them again from the new layout.
+    this.links.dropArea(directoryId);
     this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
 
     if (this.intro?.area === area) {
@@ -759,8 +774,14 @@ export class WorldScene {
     const scan = this.prepareScan(center, layout, group, materials, [rim, ground], scanned);
 
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
+    const footprint: LinkFootprint = {
+      x: center.x,
+      z: center.z,
+      halfWidth: layout.groundWidth / 2 + RIM_OVERHANG,
+      halfDepth: layout.groundDepth / 2 + RIM_OVERHANG,
+    };
     return {
-      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
+      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight, footprint,
       placements, decorMeshes, pickMeshes, materials, labels,
       activation: 1, activationTarget: 1, scan,
     };
@@ -840,6 +861,26 @@ export class WorldScene {
       }
     }
     return candidate.clone();
+  }
+
+  /**
+   * Wires a newly built district into the tree in both directions: in from its folder's
+   * plot in the parent, when the parent is standing, and out from each of its own plots to
+   * any child already standing. The second happens whenever a district is built after one
+   * of its children, which is how going up from a deep link or rebuilding an invalidated
+   * parent in place goes. Those wires join two districts that were both already there, so
+   * they arrive laid rather than running out as a new arrival's does.
+   */
+  private connectArea(area: DirectoryArea, directory: FsNode): void {
+    const parent = directory.parentId ? this.areas.get(directory.parentId) : undefined;
+    const entrance = parent?.placements.find((placement) => placement.node.id === area.id);
+    if (parent && entrance) this.links.connect(parent.id, area.id, plotFootprint(entrance), area.footprint, GROUND_TOP);
+    for (const placement of area.placements) {
+      if (placement.node.kind !== "directory") continue;
+      const child = this.areas.get(placement.node.id);
+      if (!child || child === area) continue;
+      this.links.connect(area.id, child.id, plotFootprint(placement), child.footprint, GROUND_TOP, true);
+    }
   }
 
   private isCenterFree(center: THREE.Vector3, radius: number): boolean {
@@ -1014,6 +1055,9 @@ export class WorldScene {
       total -= 1;
     }
   }
+
+  /** How lit a district is, for the things drawn between or on top of districts. */
+  private activationOf = (areaId: string): number => this.areas.get(areaId)?.activation ?? 0;
 
   /** Eases every area towards its activation target so directories cross-fade. */
   private updateActivation(delta: number): void {
@@ -1223,10 +1267,18 @@ export class WorldScene {
     // draw, and that draw stalls. So the district is shown one frame before the reveal
     // restarts: the stall lands on a frame where the reveal is still parked at nothing,
     // and the animation begins after it rather than jumping ahead by its length.
+    //
+    // The primers stay in the group for that frame and are drawn in it, collapsed to
+    // nothing. Compiling a program is not the whole cost: where the driver defers the real
+    // work until a program is first used, the stall only moves to whichever frame first
+    // draws with it, and for a primer that was only ever compiled that frame was the one
+    // where the first name or wire appeared. Drawn here, their stall joins the district's.
+    const primers = this.primers();
     const done = () => {
       if (this.lifecycle.signal.aborted) return;
       area.group.visible = true;
       requestAnimationFrame(() => {
+        primers.forEach((primer) => area.group.remove(primer));
         this.warming -= 1;
         this.restartReveal();
       });
@@ -1235,11 +1287,16 @@ export class WorldScene {
     // label primer rides along because labels are built lazily, well into the reveal,
     // and the first one compiled its program mid-scan: a visible hitch just as the
     // names began to appear. Its program outlives the visit because the primer's
-    // material does; it is only ever compiled, never drawn.
-    area.group.add(this.labelPrimer);
+    // material does. The other primers are there for the same reason: each stands in
+    // for something built after the reveal starts.
+    area.group.add(...primers);
     this.renderer.compileAsync(area.group, this.camera, this.scene).then(done, done);
-    area.group.remove(this.labelPrimer);
     area.group.visible = false;
+  }
+
+  /** Stand-ins for everything drawn with a program no district's own objects compile. */
+  private primers(): THREE.Object3D[] {
+    return [this.labelPrimer, this.links.primer];
   }
 
   private startIntro(area: DirectoryArea): void {
@@ -1497,6 +1554,9 @@ export class WorldScene {
   private detachWorld(): THREE.Object3D[] {
     this.pickMeshes.clear();
     this.areas.clear();
+    // Wires are not part of any area's group, so they are not handed back to be freed
+    // later; nothing is waiting on their program, which the primer keeps alive.
+    this.links.clear();
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
@@ -1517,6 +1577,11 @@ export class WorldScene {
    * a single area's group without touching any other.
    */
   private disposeAreaObjects(object: THREE.Object3D): void {
+    // A district torn down mid warm-up is still carrying the primers, which belong to
+    // the scene and hold programs every later district relies on.
+    for (const primer of this.primers()) {
+      if (primer.parent === object) object.remove(primer);
+    }
     object.traverse((descendant) => {
       if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
       if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
@@ -1894,6 +1959,7 @@ export class WorldScene {
     } else if (!this.revealPaused) this.advanceFlight();
 
     this.updateActivation(delta);
+    this.links.update(delta, this.revealPaused, this.activationOf);
     if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     // After the reveal, which owns the intro factor these fades multiply against.
     this.updateLabels(delta);
@@ -1954,8 +2020,19 @@ export class WorldScene {
     this.glowTexture.dispose();
     this.labelPrimer.material.map?.dispose();
     this.labelPrimer.material.dispose();
+    this.links.dispose();
     this.renderer.dispose();
   }
+}
+
+/** A folder's plot as a wire sees it: the slab's own footprint, markers aside. */
+function plotFootprint(placement: Placement): LinkFootprint {
+  return {
+    x: placement.position.x,
+    z: placement.position.z,
+    halfWidth: placement.scale.x / 2,
+    halfDepth: placement.scale.z / 2,
+  };
 }
 
 function prefersReducedMotion(): boolean {
