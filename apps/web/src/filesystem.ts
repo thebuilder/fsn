@@ -19,7 +19,8 @@ type BrowserResource =
   | { kind: "file-handle"; handle: FileSystemFileHandle }
   | { kind: "file"; file: File }
   | { kind: "text"; content: string }
-  | { kind: "url"; url: string };
+  | { kind: "url"; url: string }
+  | { kind: "generated"; read: () => Promise<Blob> };
 
 /** Browser objects live here rather than in the platform-neutral filesystem tree. */
 const browserResources = new Map<string, BrowserResource>();
@@ -50,6 +51,11 @@ export function registerBrowserUrlResource(id: string, url: string): FsResource 
   return registerResource(id, { kind: "url", url }, true);
 }
 
+/** Demo bytes built in the page; `read` generates on first call and caches its Blob. */
+export function registerBrowserGeneratedResource(id: string, read: () => Promise<Blob>): FsResource {
+  return registerResource(id, { kind: "generated", read }, true);
+}
+
 /** Drops browser objects owned by a source after the navigator switches away from it. */
 export function disposeBrowserFilesystem(filesystem: FilesystemRoot): void {
   const visit = (node: FsNode): void => {
@@ -78,6 +84,7 @@ export async function readBrowserResource(node: FsNode, signal?: AbortSignal): P
   if (resource.kind === "file") return resource.file;
   if (resource.kind === "file-handle") return resource.handle.getFile();
   if (resource.kind === "text") return new Blob([resource.content], { type: "text/plain" });
+  if (resource.kind === "generated") return resource.read();
   if (resource.kind === "url") {
     const response = await fetch(resource.url, { signal });
     if (!response.ok) throw new Error(`Demo object unavailable (HTTP ${response.status}).`);

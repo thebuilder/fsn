@@ -9,6 +9,7 @@ import {
   openBrowserDirectory,
   peekChildren,
   readBrowserResource,
+  registerBrowserGeneratedResource,
   registerBrowserTextResource,
   registerBrowserUrlResource,
   rootFromDirectoryHandle,
@@ -25,6 +26,7 @@ const platform: NavigatorPlatform = {
   demoResources: {
     text: registerBrowserTextResource,
     url: registerBrowserUrlResource,
+    bytes: registerBrowserGeneratedResource,
   },
   viewer: {
     read: readBrowserResource,
