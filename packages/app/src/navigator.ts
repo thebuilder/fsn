@@ -18,6 +18,7 @@ import {
   type GitStatusIndex,
   type IndexedObject,
 } from "@fsn/core";
+import { mountGlowToggle } from "./bloom";
 import { createDemoFilesystem } from "./demo";
 import { LatestSourceTransition } from "./filesystem-transition";
 import {
@@ -133,7 +134,9 @@ const world = new WorldScene(canvas, {
   onKeyboardNavigation: (active) => reticle.classList.toggle("is-keyboard-active", active),
   onSwapKeys: (swapped) => controls.classList.toggle("is-swapped", swapped),
   onEnterArea: adoptArea,
+  readFile: (node, signal) => platform.viewer.read(node, signal),
 });
+mountGlowToggle(getElement<HTMLButtonElement>("glow-button"), world, lifecycle.signal);
 
 /**
  * The lens a viewer last chose, applied before the first district is drawn so the city

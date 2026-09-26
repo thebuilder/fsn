@@ -13,6 +13,9 @@ import {
   type Placement,
 } from "./layout";
 import type { ColourLens } from "./lens";
+import { LinkNetwork, type LinkFootprint } from "./links";
+import { ThumbnailLoader, type ReadFile } from "./thumbnails";
+import { PhosphorBloom } from "./bloom";
 import {
   createScanCage,
   createScanDepthMaterial,
@@ -35,6 +38,12 @@ type SceneCallbacks = {
   onSwapKeys: (swapped: boolean) => void;
   /** The camera flew into a directory the user had already visited. */
   onEnterArea: (directoryId: string) => void;
+  /**
+   * Reads a file's bytes, for the pictures laid on image roofs. The navigator hands over
+   * this one capability rather than the platform, so the scene can read and do nothing
+   * else; without it the roofs simply stay plain.
+   */
+  readFile?: ReadFile;
 };
 
 export type NavigationDirection = "initial" | "forward" | "backward";
@@ -47,6 +56,8 @@ type DirectoryArea = {
   peakHeight: number;
   /** The listing this was laid out from, in its own order, so it can be laid out again. */
   nodes: FsNode[];
+  /** The floor's rim, where a wire from the parent's plot comes in. */
+  footprint: LinkFootprint;
   placements: Placement[];
   /** Every mesh holding preview markers, so the reveal can flag one update per mesh. */
   decorMeshes: THREE.InstancedMesh[];
@@ -239,6 +250,14 @@ const EASE_ACTIVATION = 0.02;
 const HOVER_LIFT = 0.35;
 /** How long the camera must stay inside an area before it takes over the UI. */
 const AREA_DWELL = 400;
+const SELECTION_COLOR = 0xf4ffd9;
+const AIM_COLOR = 0x7fffe0;
+/**
+ * How much hotter the outlines burn while the glow is up. Tone mapping holds every lit
+ * surface under the bloom's threshold, which is the point, but it holds a white line
+ * there too; so the lines meant to glow are pushed past it, and only while it is on.
+ */
+const OUTLINE_GLOW_HEAT = 2.5;
 const HOVER_TINT = new THREE.Color(1.6, 1.6, 1.6);
 const NEUTRAL_TINT = new THREE.Color(1, 1, 1);
 const NO_ROTATION = new THREE.Quaternion();
@@ -406,6 +425,16 @@ export class WorldScene {
   private readonly glowTexture = createGlowTexture();
   /** A label that is never shown, kept so its shader program is compiled ahead of need. */
   private readonly labelPrimer = makeLabel("", "#000000");
+  /** Shares the selection's geometry and material; it owns neither. */
+  private readonly outlinePrimer: THREE.LineSegments;
+  /** Wires from each visited folder's plot to its district; outside every area's group. */
+  private readonly links = new LinkNetwork();
+  private readonly thumbnails: ThumbnailLoader;
+  /** The district whose roofs were last asked for, so each arrival asks exactly once. */
+  private thumbnailArea: DirectoryArea | null = null;
+  private readonly bloom: PhosphorBloom;
+  /** What the viewer asked for; the glow itself waits for a still moment to compile. */
+  private glowWanted = false;
   private readonly clock = new THREE.Clock();
   private readonly keyLight: THREE.DirectionalLight;
   private readonly gridMaterial: THREE.ShaderMaterial;
@@ -505,12 +534,15 @@ export class WorldScene {
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Roofs are seen at a slant from almost every angle the camera flies at.
+    this.thumbnails = new ThumbnailLoader(callbacks.readFile, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
 
     this.scene.background = new THREE.Color(BACKDROP);
     this.scene.fog = new THREE.Fog(BACKDROP, 110, 520);
     this.camera = new THREE.PerspectiveCamera(52, 1, 0.5, 3000);
     this.camera.position.set(0, 16, 30);
     this.scene.add(this.camera);
+    this.bloom = new PhosphorBloom(this.renderer, this.scene, this.camera);
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -548,16 +580,28 @@ export class WorldScene {
     this.gridMaterial = environment.gridMaterial;
     this.sky = environment.sky;
     this.scene.add(this.worldGroup);
+    this.scene.add(this.links.group);
 
     this.outlineGeometry = new THREE.EdgesGeometry(this.unitBox);
-    this.selectionMaterial = new THREE.LineBasicMaterial({ color: 0xf4ffd9, transparent: true, opacity: 0.95 });
+    this.selectionMaterial = new THREE.LineBasicMaterial({ color: SELECTION_COLOR, transparent: true, opacity: 0.95 });
     this.selectionBox = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
-    this.aimMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.5 });
+    this.aimMaterial = new THREE.LineBasicMaterial({ color: AIM_COLOR, transparent: true, opacity: 0.5 });
     this.aimBox = new THREE.LineSegments(this.outlineGeometry, this.aimMaterial);
     this.aimBox.visible = false;
     this.scene.add(this.aimBox);
+    // Both outlines start hidden, so without this their program was first compiled by
+    // the first click that selected anything: a freeze on the very gesture meant to
+    // answer it. The aim outline's material differs only in colour and opacity, which
+    // are uniforms, so priming one primes both.
+    this.outlinePrimer = new THREE.LineSegments(this.outlineGeometry, this.selectionMaterial);
+
+    // Primers are drawn once per warm-up, so they must never cover a pixel or be culled.
+    for (const primer of this.primers()) {
+      primer.scale.setScalar(0);
+      primer.frustumCulled = false;
+    }
 
     const listener = { signal: this.lifecycle.signal };
     this.canvas.addEventListener("pointermove", this.onPointerMove, listener);
@@ -590,6 +634,9 @@ export class WorldScene {
     // for: choosing the demo from the welcome screen, which already shows the demo,
     // recompiled everything and froze a phone for over a second.
     const retired = direction === "initial" ? this.detachWorld() : [];
+    // Whatever was being read for the last district's roofs is no longer being looked at.
+    this.thumbnails.cancel();
+    this.thumbnailArea = null;
 
     let area = this.areas.get(directory.id);
     let isNew = false;
@@ -604,6 +651,7 @@ export class WorldScene {
       area = this.createArea(directory.id, center, layout, nodes, scan);
       this.areas.set(directory.id, area);
       this.worldGroup.add(area.group);
+      this.connectArea(area, directory.parentId);
       this.warmUp(area);
       isNew = true;
     }
@@ -636,6 +684,11 @@ export class WorldScene {
     this.disposeAreaObjects(area.group);
     this.worldGroup.remove(area.group);
     this.areas.delete(directoryId);
+    // Both ends go: the wire in, and the wires out from plots that are about to be
+    // replaced. The rebuild lays them again from the new layout.
+    this.links.dropArea(directoryId);
+    this.thumbnails.forgetArea(directoryId);
+    if (this.thumbnailArea === area) this.thumbnailArea = null;
     this.invalidatedCenter = { id: directoryId, center: area.center.clone() };
 
     if (this.intro?.area === area) {
@@ -730,7 +783,20 @@ export class WorldScene {
     }
     if (this.pendingArea === area) this.pendingArea = null;
 
-    const carry = (placement: Placement | null): Placement | null => {
+    // A new layout moves plots and resizes the floor, so every wire into or out of this
+    // district is laid again against it, already in place since both ends were standing.
+    // Its pictures belonged to towers that are gone; the new ones fetch their own.
+    const parent = [...this.areas.values()].find((candidate) =>
+      candidate.placements.some((placement) => placement.node.id === area.id));
+    this.links.dropArea(area.id);
+    this.connectArea(next, parent?.id ?? null, true);
+    this.thumbnails.forgetArea(area.id);
+    if (this.thumbnailArea === area) {
+      this.thumbnails.cancel();
+      this.thumbnailArea = null;
+    }
+
+    const carry =(placement: Placement | null): Placement | null => {
       if (!placement || !area.placements.includes(placement)) return placement;
       return next.placements.find((candidate) => candidate.node.id === placement.node.id) ?? null;
     };
@@ -956,8 +1022,14 @@ export class WorldScene {
     const scan = this.prepareScan(center, layout, group, materials, [rim, ground], scanned);
 
     // Born lit: a new area is revealed by the growth animation, not by a fade-up.
+    const footprint: LinkFootprint = {
+      x: center.x,
+      z: center.z,
+      halfWidth: layout.groundWidth / 2 + RIM_OVERHANG,
+      halfDepth: layout.groundDepth / 2 + RIM_OVERHANG,
+    };
     return {
-      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight,
+      id, group, center: center.clone(), radius: layout.radius, peakHeight: layout.peakHeight, footprint,
       nodes, placements, decorMeshes, pickMeshes, materials, labels,
       ready: true, activation: 1, activationTarget: 1, scan,
     };
@@ -1037,6 +1109,26 @@ export class WorldScene {
       }
     }
     return candidate.clone();
+  }
+
+  /**
+   * Wires a newly built district into the tree in both directions: in from its folder's
+   * plot in the parent, when the parent is standing, and out from each of its own plots to
+   * any child already standing. The second happens whenever a district is built after one
+   * of its children, which is how going up from a deep link or rebuilding an invalidated
+   * parent in place goes. Those wires join two districts that were both already there, so
+   * they arrive laid rather than running out as a new arrival's does.
+   */
+  private connectArea(area: DirectoryArea, parentId: string | null, grown = false): void {
+    const parent = parentId ? this.areas.get(parentId) : undefined;
+    const entrance = parent?.placements.find((placement) => placement.node.id === area.id);
+    if (parent && entrance) this.links.connect(parent.id, area.id, plotFootprint(entrance), area.footprint, GROUND_TOP, grown);
+    for (const placement of area.placements) {
+      if (placement.node.kind !== "directory") continue;
+      const child = this.areas.get(placement.node.id);
+      if (!child || child === area) continue;
+      this.links.connect(area.id, child.id, plotFootprint(placement), child.footprint, GROUND_TOP, true);
+    }
   }
 
   private isCenterFree(center: THREE.Vector3, radius: number): boolean {
@@ -1224,6 +1316,26 @@ export class WorldScene {
       entry.sprite.material.dispose();
       total -= 1;
     }
+  }
+
+  /** How lit a district is, for the things drawn between or on top of districts. */
+  private activationOf = (areaId: string): number => this.areas.get(areaId)?.activation ?? 0;
+
+  /**
+   * Asks for the active district's pictures once its reveal is over and the camera has
+   * landed, not while either plays. Decoding happens off the thread, but reading does not
+   * always: a source that has to produce its bytes (the demo draws and deflates its PNG in
+   * the page) spends real time on the main thread, and a hitch is far less noticeable in
+   * a still view than in a moving one. A roof dressed before the scan has found its tower
+   * would also float a picture over empty ground.
+   */
+  private updateThumbnails(): void {
+    const area = this.currentArea;
+    if (area && area !== this.thumbnailArea && !this.intro && !this.flight && !this.revealPaused) {
+      this.thumbnailArea = area;
+      this.thumbnails.request(area.id, area.group, area.placements, this.camera.position);
+    }
+    this.thumbnails.update(performance.now(), this.activationOf);
   }
 
   /** Eases every area towards its activation target so directories cross-fade. */
@@ -1435,11 +1547,19 @@ export class WorldScene {
     // draw, and that draw stalls. So the district is shown one frame before the reveal
     // restarts: the stall lands on a frame where the reveal is still parked at nothing,
     // and the animation begins after it rather than jumping ahead by its length.
+    //
+    // The primers stay in the group for that frame and are drawn in it, collapsed to
+    // nothing. Compiling a program is not the whole cost: where the driver defers the real
+    // work until a program is first used, the stall only moves to whichever frame first
+    // draws with it, and for a primer that was only ever compiled that frame was the one
+    // where the first name or wire appeared. Drawn here, their stall joins the district's.
+    const primers = this.primers();
     const done = () => {
       if (this.lifecycle.signal.aborted) return;
       area.ready = true;
       area.group.visible = true;
       requestAnimationFrame(() => {
+        primers.forEach((primer) => area.group.remove(primer));
         this.warming -= 1;
         this.restartReveal();
       });
@@ -1448,11 +1568,16 @@ export class WorldScene {
     // label primer rides along because labels are built lazily, well into the reveal,
     // and the first one compiled its program mid-scan: a visible hitch just as the
     // names began to appear. Its program outlives the visit because the primer's
-    // material does; it is only ever compiled, never drawn.
-    area.group.add(this.labelPrimer);
+    // material does. The other primers are there for the same reason: each stands in
+    // for something built after the reveal starts.
+    area.group.add(...primers);
     this.renderer.compileAsync(area.group, this.camera, this.scene).then(done, done);
-    area.group.remove(this.labelPrimer);
     area.group.visible = false;
+  }
+
+  /** Stand-ins for everything drawn with a program no district's own objects compile. */
+  private primers(): THREE.Object3D[] {
+    return [this.labelPrimer, this.outlinePrimer, this.links.primer, this.thumbnails.primer];
   }
 
   private startIntro(area: DirectoryArea): void {
@@ -1611,6 +1736,28 @@ export class WorldScene {
     if (this.currentArea) this.flyToArea(this.currentArea, "travel");
   }
 
+  /** Switches the phosphor glow on or off; see `updateGlow` for when it actually starts. */
+  setGlow(on: boolean): void {
+    this.glowWanted = on;
+  }
+
+  /**
+   * The glow's passes are compiled the first time it is wanted, and never inside a reveal
+   * or a flight: that is the same freeze the warm-up exists to keep out of the arrival.
+   * So a glow remembered from a previous visit comes up once the city has landed, and one
+   * switched on mid-flight comes up when the flight does. Nor before there is a city at
+   * all: the page's first frames have nothing to reveal yet, and compiling then is
+   * exactly the load-time freeze this is keeping out.
+   */
+  private updateGlow(delta: number): void {
+    const still = this.currentArea !== null && !this.intro && !this.flight && !this.revealPaused;
+    if (this.glowWanted && still && !this.bloom.isReady && !this.bloom.isPreparing) void this.bloom.prepare();
+    this.bloom.update(delta, this.glowWanted);
+    const heat = 1 + this.bloom.level * OUTLINE_GLOW_HEAT;
+    this.selectionMaterial.color.set(SELECTION_COLOR).multiplyScalar(heat);
+    this.aimMaterial.color.set(AIM_COLOR).multiplyScalar(heat);
+  }
+
   getAimedNode(): FsNode | null {
     return this.aimed?.node ?? null;
   }
@@ -1711,6 +1858,12 @@ export class WorldScene {
     this.pickMeshes.clear();
     this.areas.clear();
     this.pendingRebuilds.clear();
+    // Wires are not part of any area's group, so they are not handed back to be freed
+    // later; nothing is waiting on their program, which the primer keeps alive.
+    this.links.clear();
+    // The pictures themselves go with their groups; only the bookkeeping is dropped here.
+    this.thumbnails.forgetAll();
+    this.thumbnailArea = null;
     this.currentArea = null;
     this.flight = null;
     this.intro = null;
@@ -1731,6 +1884,11 @@ export class WorldScene {
    * a single area's group without touching any other.
    */
   private disposeAreaObjects(object: THREE.Object3D): void {
+    // A district torn down mid warm-up is still carrying the primers, which belong to
+    // the scene and hold programs every later district relies on.
+    for (const primer of this.primers()) {
+      if (primer.parent === object) object.remove(primer);
+    }
     object.traverse((descendant) => {
       if (!(descendant instanceof THREE.Mesh || descendant instanceof THREE.Line || descendant instanceof THREE.Sprite)) return;
       if (descendant.geometry && descendant.geometry !== this.unitBox) descendant.geometry.dispose();
@@ -1833,6 +1991,7 @@ export class WorldScene {
     this.scratchMatrix.compose(this.scratchVector, NO_ROTATION, placement.scale);
     mesh.setMatrixAt(placement.instanceIndex, this.scratchMatrix);
     mesh.instanceMatrix.needsUpdate = true;
+    this.thumbnails.lift(placement, lift);
 
     // A plot lifting out from under its own markers would tear the preview apart.
     placement.decor.forEach((decor) => {
@@ -2031,6 +2190,7 @@ export class WorldScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    this.bloom.setSize(width, height);
   };
 
   private updateMovement(delta: number): void {
@@ -2108,6 +2268,8 @@ export class WorldScene {
     } else if (!this.revealPaused) this.advanceFlight();
 
     this.updateActivation(delta);
+    this.links.update(delta, this.revealPaused, this.activationOf);
+    this.updateThumbnails();
     if (this.intro && !this.revealPaused && this.applyIntro(performance.now() - this.intro.startedAt)) this.finishIntro();
     if (this.pendingRebuilds.size) this.flushRebuilds();
     // After the reveal, which owns the intro factor these fades multiply against.
@@ -2142,7 +2304,9 @@ export class WorldScene {
       this.checkAreaEntry();
       this.updateAim();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.updateGlow(delta);
+    if (this.bloom.drawing) this.bloom.render(delta);
+    else this.renderer.render(this.scene, this.camera);
     // Only now, with their replacements drawn and holding the programs, can the districts
     // a rebuild retired be freed without taking a shader down with them.
     if (this.retired.length) {
@@ -2177,8 +2341,21 @@ export class WorldScene {
     this.glowTexture.dispose();
     this.labelPrimer.material.map?.dispose();
     this.labelPrimer.material.dispose();
+    this.links.dispose();
+    this.thumbnails.dispose();
+    this.bloom.dispose();
     this.renderer.dispose();
   }
+}
+
+/** A folder's plot as a wire sees it: the slab's own footprint, markers aside. */
+function plotFootprint(placement: Placement): LinkFootprint {
+  return {
+    x: placement.position.x,
+    z: placement.position.z,
+    halfWidth: placement.scale.x / 2,
+    halfDepth: placement.scale.z / 2,
+  };
 }
 
 function prefersReducedMotion(): boolean {
