@@ -282,7 +282,11 @@ function makeLabel(text: string, color: string): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   // Sizing belongs to `placeLabel`, which owns it for the life of the sprite.
-  return new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  // After the wires, which come at 1. A plate writes no depth, so whatever is drawn later
+  // lands on top of it: a wire running behind a name would cross the plate otherwise.
+  sprite.renderOrder = 2;
+  return sprite;
 }
 
 /** A label's footprint on screen, in normalised device coordinates. */
